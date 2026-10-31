@@ -21,7 +21,7 @@ public sealed class JobSubmissionTests
         await harness.Start();
         try
         {
-            var controller = new JobsController(store, provider.GetRequiredService<IBus>());
+            var controller = new JobsController(store, provider.GetRequiredService<IBus>(), new AllowCrawlUrlPolicy());
 
             var response = await controller.Create(
                 new CreateJobRequest("https://example.com:443/start#section", null),
@@ -58,10 +58,38 @@ public sealed class JobSubmissionTests
         await harness.Start();
         try
         {
-            var controller = new JobsController(store, provider.GetRequiredService<IBus>());
+            var controller = new JobsController(store, provider.GetRequiredService<IBus>(), new AllowCrawlUrlPolicy());
 
             var response = await controller.Create(
                 new CreateJobRequest(url, maxDepth),
+                CancellationToken.None);
+
+            Assert.IsType<BadRequestObjectResult>(response);
+            Assert.Null(store.JobId);
+            Assert.False(await harness.Published.Any<CrawlMessage>());
+        }
+        finally
+        {
+            await harness.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task Create_rejects_loopback_address()
+    {
+        var store = new RecordingJobStore();
+        var services = new ServiceCollection();
+        services.AddMassTransitTestHarness();
+        await using var provider = services.BuildServiceProvider();
+        var harness = provider.GetRequiredService<ITestHarness>();
+        await harness.Start();
+        try
+        {
+            var controller = new JobsController(store, provider.GetRequiredService<IBus>(),
+                new PublicHttpUrlPolicy());
+
+            var response = await controller.Create(
+                new CreateJobRequest("http://127.0.0.1/", 2),
                 CancellationToken.None);
 
             Assert.IsType<BadRequestObjectResult>(response);
@@ -96,5 +124,12 @@ public sealed class JobSubmissionTests
 
         public Task<IReadOnlyList<PageNode>> GetTreeAsync(Guid jobId, CancellationToken ct) =>
             throw new NotImplementedException();
+
+        public Task<bool> CancelJobAsync(Guid id, CancellationToken ct) => Task.FromResult(false);
+    }
+
+    private sealed class AllowCrawlUrlPolicy : ICrawlUrlPolicy
+    {
+        public Task EnsurePublicHttpUrlAsync(Uri uri, CancellationToken ct) => Task.CompletedTask;
     }
 }

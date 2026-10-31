@@ -90,12 +90,65 @@ public sealed class CrawlConsumerTests
         Assert.Equal(200, store.KnownUrls.Count);
     }
 
+    [Fact]
+    public async Task Crawl_follows_same_host_redirects_only()
+    {
+        var jobId = Guid.NewGuid();
+        var store = new RecordingCrawlStore(new CrawlJob(jobId, "https://example.com/", "Pending", 1, 0,
+            DateTimeOffset.UtcNow, null, null, null));
+        var requested = new ConcurrentBag<string>();
+
+        await RunConsumerAsync(store, url =>
+        {
+            requested.Add(url.AbsoluteUri);
+            if (url.AbsolutePath == "/")
+                return new HttpResponseMessage(HttpStatusCode.Redirect)
+                {
+                    Headers = { Location = new Uri("/landing", UriKind.Relative) },
+                    RequestMessage = new HttpRequestMessage(HttpMethod.Get, url)
+                };
+            if (url.AbsolutePath == "/landing")
+                return HtmlResponse("<a href='https://other.example/'>external</a>", url);
+            throw new InvalidOperationException($"Unexpected request to {url}.");
+        });
+
+        Assert.Equal(["https://example.com/", "https://example.com/landing"], requested.Order());
+        var page = Assert.Single(store.Pages);
+        Assert.Equal("https://example.com/landing", page.Url);
+        Assert.Equal(0, page.Depth);
+        Assert.Equal("Completed", store.Status);
+    }
+
+    [Fact]
+    public async Task Crawl_does_not_follow_cross_host_redirects()
+    {
+        var jobId = Guid.NewGuid();
+        var store = new RecordingCrawlStore(new CrawlJob(jobId, "https://example.com/", "Pending", 1, 0,
+            DateTimeOffset.UtcNow, null, null, null));
+        var requested = new ConcurrentBag<string>();
+
+        await RunConsumerAsync(store, url =>
+        {
+            requested.Add(url.AbsoluteUri);
+            return new HttpResponseMessage(HttpStatusCode.Redirect)
+            {
+                Headers = { Location = new Uri("https://other.example/landing") },
+                RequestMessage = new HttpRequestMessage(HttpMethod.Get, url)
+            };
+        });
+
+        Assert.Equal(["https://example.com/"], requested);
+        Assert.Empty(store.Pages);
+        Assert.Equal("Completed", store.Status);
+    }
+
     private static async Task RunConsumerAsync(RecordingCrawlStore store,
         Func<Uri, HttpResponseMessage> respond)
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<ICrawlExecutionStore>(store);
+        services.AddSingleton<ICrawlUrlPolicy, AllowCrawlUrlPolicy>();
         services.AddSingleton<IHttpClientFactory>(new TestHttpClientFactory(respond));
         services.AddMassTransitTestHarness(config => config.AddConsumer<CrawlConsumer>());
         await using var provider = services.BuildServiceProvider();
@@ -129,6 +182,11 @@ public sealed class CrawlConsumerTests
             new(new DelegateHttpMessageHandler(respond));
     }
 
+    private sealed class AllowCrawlUrlPolicy : ICrawlUrlPolicy
+    {
+        public Task EnsurePublicHttpUrlAsync(Uri uri, CancellationToken ct) => Task.CompletedTask;
+    }
+
     private sealed class DelegateHttpMessageHandler(Func<Uri, HttpResponseMessage> respond)
         : HttpMessageHandler
     {
@@ -156,6 +214,9 @@ public sealed class CrawlConsumerTests
 
         public Task<CrawlJob?> GetJobAsync(Guid id, CancellationToken ct) =>
             Task.FromResult<CrawlJob?>(id == Job.JobId ? Job with { Status = Status } : null);
+
+        public Task<bool> IsCancellationRequestedAsync(Guid id, CancellationToken ct) =>
+            Task.FromResult(Status == "Canceled");
 
         public Task<HistoryResult> GetHistoryAsync(int page, int pageSize, CancellationToken ct) =>
             throw new NotImplementedException();

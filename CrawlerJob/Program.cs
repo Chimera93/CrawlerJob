@@ -8,6 +8,7 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
         .AllowAnyHeader().AllowAnyMethod()));
 builder.Services.AddSingleton<CrawlStore>();
 builder.Services.AddSingleton<ICrawlJobStore>(services => services.GetRequiredService<CrawlStore>());
+builder.Services.AddSingleton<ICrawlUrlPolicy, PublicHttpUrlPolicy>();
 builder.Services.AddHealthChecks();
 builder.Services.AddMassTransit(x =>
 {

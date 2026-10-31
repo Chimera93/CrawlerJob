@@ -10,11 +10,14 @@ public sealed class CrawlConsumer : IConsumer<CrawlMessage>
     private readonly ILogger<CrawlConsumer> _logger;
     private readonly ICrawlExecutionStore _store;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ICrawlUrlPolicy _urlPolicy;
 
-    public CrawlConsumer(ICrawlExecutionStore store, IHttpClientFactory httpClientFactory, ILogger<CrawlConsumer> logger)
+    public CrawlConsumer(ICrawlExecutionStore store, IHttpClientFactory httpClientFactory,
+        ICrawlUrlPolicy urlPolicy, ILogger<CrawlConsumer> logger)
     {
         _store = store;
         _httpClientFactory = httpClientFactory;
+        _urlPolicy = urlPolicy;
         _logger = logger;
     }
 
@@ -25,14 +28,19 @@ public sealed class CrawlConsumer : IConsumer<CrawlMessage>
         {
             _logger.LogInformation("Received crawl job {JobId}", jobId);
             var job = await _store.GetJobAsync(jobId, context.CancellationToken);
-            if (job is null || job.Status is "Completed" or "Failed")
+            if (job is null || job.Status is "Completed" or "Failed" or "Canceled")
                 return;
             await _store.SetRunningAsync(jobId, context.CancellationToken);
-            await CrawlAsync(job, context.CancellationToken);
-            await _store.CompleteAsync(jobId, context.CancellationToken);
+            if (!await CrawlAsync(job, context.CancellationToken))
+                await _store.CompleteAsync(jobId, context.CancellationToken);
         }
         catch (Exception ex)
         {
+            if (await _store.IsCancellationRequestedAsync(jobId, context.CancellationToken))
+            {
+                _logger.LogInformation("Stopping canceled crawl job {JobId}", jobId);
+                return;
+            }
             _logger.LogError(ex, "Crawl job {JobId} failed on attempt {RetryAttempt}",
                 jobId, context.GetRetryAttempt());
             if (context.GetRetryAttempt() >= 2)
@@ -43,7 +51,7 @@ public sealed class CrawlConsumer : IConsumer<CrawlMessage>
         }
     }
 
-    private async Task CrawlAsync(CrawlJob job, CancellationToken ct)
+    private async Task<bool> CrawlAsync(CrawlJob job, CancellationToken ct)
     {
         var start = new Uri(job.Url);
         var queue = new Queue<(Uri Url, string? Parent, int Depth)>();
@@ -52,6 +60,8 @@ public sealed class CrawlConsumer : IConsumer<CrawlMessage>
         queue.Enqueue((start, null, 0));
         while (queue.TryDequeue(out var current) && !ct.IsCancellationRequested)
         {
+            if (await _store.IsCancellationRequestedAsync(job.JobId, ct))
+                return true;
             var currentUrl = UrlNormalizer.Normalize(current.Url);
             if (await _store.IsPageStoredAsync(job.JobId, currentUrl, ct))
             {
@@ -67,7 +77,9 @@ public sealed class CrawlConsumer : IConsumer<CrawlMessage>
                 }
                 continue;
             }
-            using var response = await _httpClientFactory.CreateClient("crawler").GetAsync(current.Url, ct);
+            using var response = await GetResponseAsync(current.Url, start, job.JobId, ct);
+            if (response is null)
+                continue;
             if (!response.IsSuccessStatusCode)
             {
                 if ((int)response.StatusCode >= 500)
@@ -99,6 +111,8 @@ public sealed class CrawlConsumer : IConsumer<CrawlMessage>
         if (limitReached)
             _logger.LogWarning("Page limit {MaxPages} reached for job {JobId}", MaxPages, job.JobId);
 
+        return await _store.IsCancellationRequestedAsync(job.JobId, ct);
+
         void TryQueue(Uri url, string parent, int depth)
         {
             var normalized = UrlNormalizer.Normalize(url);
@@ -113,5 +127,47 @@ public sealed class CrawlConsumer : IConsumer<CrawlMessage>
             queue.Enqueue((url, parent, depth));
         }
     }
+
+    private async Task<HttpResponseMessage?> GetResponseAsync(Uri initialUrl, Uri start, Guid jobId,
+        CancellationToken ct)
+    {
+        var client = _httpClientFactory.CreateClient("crawler");
+        var current = initialUrl;
+        for (var redirectCount = 0; redirectCount <= 5; redirectCount++)
+        {
+            try
+            {
+                await _urlPolicy.EnsurePublicHttpUrlAsync(current, ct);
+            }
+            catch (UnsafeCrawlUrlException exception)
+            {
+                _logger.LogWarning("Blocked unsafe crawl URL {Url} for job {JobId}: {Reason}",
+                    current, jobId, exception.Message);
+                return null;
+            }
+
+            var response = await client.GetAsync(current, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!IsRedirect(response.StatusCode) || response.Headers.Location is null || redirectCount == 5)
+                return response;
+
+            var destination = response.Headers.Location.IsAbsoluteUri
+                ? response.Headers.Location
+                : new Uri(current, response.Headers.Location);
+            response.Dispose();
+            if (!string.Equals(destination.Host, start.Host, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning("Blocked cross-host redirect to {Url} for job {JobId}", destination, jobId);
+                return null;
+            }
+            current = destination;
+        }
+
+        return null;
+    }
+
+    private static bool IsRedirect(HttpStatusCode status) =>
+        status is HttpStatusCode.MovedPermanently or HttpStatusCode.Redirect or
+            HttpStatusCode.RedirectMethod or HttpStatusCode.TemporaryRedirect or
+            HttpStatusCode.PermanentRedirect;
 
 }
