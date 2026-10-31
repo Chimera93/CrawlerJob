@@ -93,6 +93,10 @@ Testcontainers starts and removes its own PostgreSQL and RabbitMQ containers. In
 dotnet test .\Crawler.Tests\Crawler.Tests.csproj --filter Category=Integration
 ```
 
+### Require CI on `main`
+
+The GitHub Actions workflow at `.github/workflows/ci.yml` runs the Release test suite on pushes and pull requests targeting `main`. To require it before merging, create a branch protection rule or ruleset for `main` in the repository's **Settings**. Enable **Require status checks to pass before merging** and select **Build and test** as a required check. If the check is not listed yet, push the workflow and let it complete once, then return to the rule and select it. This repository setting requires GitHub repository admin access and cannot be enabled by the workflow file itself.
+
 ## Delivery approach
 
 Work is prioritized as ranked vertical slices: (1) submit a URL and acknowledge a persisted/published job; (2) crawl bounded HTML and calculate link metrics; (3) persist lifecycle/progress and idempotent page/edge results; (4) inspect the completed result tree; (5) browse job history; and (6) run and observe the full local stack. Each slice aims to provide an end-to-end user capability instead of completing all backend or frontend work separately. The detailed acceptance checks and current status are in [IMPLEMENTATION-NOTES.md](IMPLEMENTATION-NOTES.md).
@@ -103,6 +107,6 @@ Use a test-first loop where practical: derive a focused test from the requiremen
 
 - **Implemented first:** durable job lifecycle and clear API/worker boundaries, then bounded crawl persistence and messaging. Those paths establish the assignment's core asynchronous flow.
 - **Cut / simplified:** no authentication or rate limiting is built into the application; production deployments are expected to enforce both at the hosting boundary (for example, an identity-aware API gateway and ingress/load balancer policies). The local Compose setup is for development, not a production security boundary. Other omissions include configurable page limits, content rendering, and SSE. Direct publish follows the job insert rather than using a transactional outbox.
-- **Next with more time:** add a transactional outbox and stronger poison-message replay/observability, delayed redelivery across process restarts, load/performance tests, crawl politeness limits, a UI pagination control, and CI build/test automation. The current worker's 200-page ceiling is a constant and should become configuration.
+- **Next with more time:** add a transactional outbox and stronger poison-message replay/observability, delayed redelivery across process restarts, load/performance tests, crawl politeness limits, and a UI pagination control. The current worker's 200-page ceiling is a constant and should become configuration.
 
 See [IMPLEMENTATION-NOTES.md](IMPLEMENTATION-NOTES.md) for the ongoing requirement breakdown and decision log.
