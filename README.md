@@ -43,7 +43,7 @@ Run all .NET tests, including the container-backed crawl pipeline integration te
 dotnet test .\Crawler.Tests\Crawler.Tests.csproj
 ```
 
-Testcontainers starts and removes its own PostgreSQL and RabbitMQ containers, and the integration test serves deterministic crawl pages locally. No Docker Compose services or external websites are needed for tests. Run only the integration test with:
+Testcontainers starts and removes its own PostgreSQL and RabbitMQ containers. Integration tests submit jobs through the real API, verify worker retries, duplicate delivery, and recovery after partial persistence against deterministic local pages, and check persisted results. No Docker Compose services or external websites are needed for tests. Run only the integration tests with:
 
 ```powershell
 dotnet test .\Crawler.Tests\Crawler.Tests.csproj --filter Category=Integration

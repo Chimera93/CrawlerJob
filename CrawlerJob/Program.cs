@@ -12,7 +12,13 @@ builder.Services.AddHealthChecks();
 builder.Services.AddMassTransit(x =>
 {
     x.UsingRabbitMq((_, cfg) =>
-        cfg.Host(builder.Configuration["RabbitMq:Host"] ?? "localhost"));
+    {
+        var rabbitMqUri = builder.Configuration["RabbitMq:Uri"];
+        if (rabbitMqUri is not null)
+            cfg.Host(new Uri(rabbitMqUri));
+        else
+            cfg.Host(builder.Configuration["RabbitMq:Host"] ?? "localhost");
+    });
 });
 
 var app = builder.Build();
@@ -21,3 +27,5 @@ app.MapHealthChecks("/health");
 app.UseCors();
 app.MapControllers();
 app.Run();
+
+public partial class Program;
