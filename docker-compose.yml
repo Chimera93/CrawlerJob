@@ -32,6 +32,7 @@ services:
       dockerfile: CrawlerJob/Dockerfile
     environment:
       ASPNETCORE_URLS: http://+:8080
+      ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Crawler: Host=db;Port=5432;Database=crawler;Username=crawler;Password=crawler
       RabbitMq__Host: rabbitmq
       Frontend__Origin: http://localhost:5173

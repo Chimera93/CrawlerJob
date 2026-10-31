@@ -1,6 +1,7 @@
 namespace Crawler.Infrastructure;
 
 public sealed record CreateJobRequest(string Url, int? MaxDepth);
+public sealed record CreateJobResponse(Guid JobId);
 public sealed record CrawlMessage(Guid JobId);
 public sealed record CrawlJob(Guid JobId, string Url, string Status, int MaxDepth, int PagesCrawled,
     DateTimeOffset CreatedAt, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt, string? FailureReason);
