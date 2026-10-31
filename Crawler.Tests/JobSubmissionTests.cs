@@ -31,8 +31,7 @@ public sealed class JobSubmissionTests
             Assert.Equal(202, accepted.StatusCode);
             Assert.Equal("https://example.com/start", store.Url);
             Assert.Equal(2, store.MaxDepth);
-            Assert.Equal(store.JobId, Assert.IsType<Guid>(accepted.Value!.GetType()
-                .GetProperty("jobId")!.GetValue(accepted.Value)));
+            Assert.Equal(store.JobId, Assert.IsType<CreateJobResponse>(accepted.Value).JobId);
             var published = harness.Published.Select<CrawlMessage>().Single();
             Assert.Equal(store.JobId, published.Context.Message.JobId);
         }

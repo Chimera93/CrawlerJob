@@ -31,6 +31,30 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Swagger_documentation_is_available_in_development()
+    {
+        await using var api = new ApiFactory(
+            fixture.PostgresConnectionString, fixture.RabbitMq.GetConnectionString());
+        using var client = api.CreateClient();
+
+        using var uiResponse = await client.GetAsync("/swagger/index.html");
+        Assert.Equal(HttpStatusCode.OK, uiResponse.StatusCode);
+
+        using var documentResponse = await client.GetAsync("/swagger/v1/swagger.json");
+        Assert.Equal(HttpStatusCode.OK, documentResponse.StatusCode);
+        using var document = await System.Text.Json.JsonDocument.ParseAsync(
+            await documentResponse.Content.ReadAsStreamAsync());
+        var root = document.RootElement;
+        Assert.Equal("Website Crawl Jobs API", root.GetProperty("info").GetProperty("title").GetString());
+        var paths = root.GetProperty("paths");
+        Assert.True(paths.TryGetProperty("/api/jobs", out var jobs));
+        Assert.True(jobs.TryGetProperty("post", out _));
+        Assert.True(paths.TryGetProperty("/api/jobs/{jobId}/cancel", out _));
+        Assert.True(paths.TryGetProperty("/api/jobs/{jobId}/tree", out _));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Cancellation_finishes_in_flight_request_then_stops_before_next_page()
     {
         var requestStarted = new TaskCompletionSource(

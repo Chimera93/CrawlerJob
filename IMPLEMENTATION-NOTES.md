@@ -38,6 +38,7 @@ This is the working breakdown for the home assignment. Update the status and dec
 | Bounded crawl | Default depth is 2 and a worker limit of 200 discovered URLs prevents an unbounded crawl. The limit should be surfaced/configurable if time allows. |
 | Host-based same-domain traversal | Matches the stated definition of starting domain as the initial URL's host; external links are recorded as outgoing edges but not crawled. |
 | Polling for progress | Simpler than SSE/SignalR and sufficient for this assignment. |
+| Development Swagger UI | Added after end-to-end verification so reviewers can explore API contracts interactively without delaying the core CLI-driven implementation. Kept off outside Development. See [ADR 0006](docs/adr/0006-development-swagger-ui.md). |
 | Public HTTP URL policy | Reject private/reserved DNS results and credentials; connect to validated IPs to reduce DNS-rebinding risk, and refuse cross-host redirects. This is a conservative defense-in-depth policy, not a replacement for network egress controls. See [ADR 0005](docs/adr/0005-public-url-policy-and-cancellation.md). |
 | Cooperative cancellation | The active HTTP request completes and its result is persisted; the worker checks the canceled state before continuing. This avoids tearing down a request mid-flight and returns any partial results. |
 | Cancellation timestamp | Reuse `completed_at` for the terminal timestamp because the schema has no separate canceled-at field. |

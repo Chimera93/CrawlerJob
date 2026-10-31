@@ -29,6 +29,8 @@ Invoke-RestMethod http://localhost:8080/health
 Invoke-RestMethod http://localhost:8081/health
 ```
 
+The API's interactive Swagger UI is available at <http://localhost:8080/swagger> in the local Compose setup. It documents the job endpoints, request/response shapes, and status codes. Swagger is enabled only in the Development environment.
+
 For a UI smoke test, open <http://localhost:5173>, submit `https://example.com` with max depth `1`, and confirm the Job Details page shows the job ID and updates to `Completed` with its page tree. Then open **History** and confirm the job appears there; open it again to verify navigation back to its details. Loopback and private-network URLs are intentionally rejected.
 
 ### Start Crawl screen
@@ -75,6 +77,7 @@ Stop with `docker compose down`. PostgreSQL data is kept in the `crawler-data` v
 - Crawl submission and every worker request reject credentials, non-HTTP(S) URLs, and hosts with any non-globally-routable DNS answer. The worker resolves and validates addresses again at connection time and connects directly to a validated IP to mitigate DNS rebinding. Redirects are manual, limited to five hops, and may not change host. See [ADR 0005](docs/adr/0005-public-url-policy-and-cancellation.md).
 - Cancellation is cooperative: the in-flight response is fully read and its page result persisted, then the worker stops before requesting another page. The job remains `Canceled`; `completed_at` records the terminal timestamp and the UI displays any partial tree.
 - The UI uses polling rather than SSE/SignalR. It shows job state, timestamps, count-based progress, failure text, result tree, and history.
+- Swagger UI documents the API in Development only; the local Compose API explicitly runs in Development, while deployed production environments do not expose the docs by default. See [ADR 0006](docs/adr/0006-development-swagger-ui.md).
 
 ## Testing
 
