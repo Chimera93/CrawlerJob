@@ -8,10 +8,10 @@ public sealed class CrawlConsumer : IConsumer<CrawlMessage>
 {
     private const int MaxPages = 200;
     private readonly ILogger<CrawlConsumer> _logger;
-    private readonly CrawlStore _store;
+    private readonly ICrawlExecutionStore _store;
     private readonly IHttpClientFactory _httpClientFactory;
 
-    public CrawlConsumer(CrawlStore store, IHttpClientFactory httpClientFactory, ILogger<CrawlConsumer> logger)
+    public CrawlConsumer(ICrawlExecutionStore store, IHttpClientFactory httpClientFactory, ILogger<CrawlConsumer> logger)
     {
         _store = store;
         _httpClientFactory = httpClientFactory;
@@ -48,6 +48,7 @@ public sealed class CrawlConsumer : IConsumer<CrawlMessage>
         var start = new Uri(job.Url);
         var queue = new Queue<(Uri Url, string? Parent, int Depth)>();
         var seen = new HashSet<string>(StringComparer.Ordinal) { UrlNormalizer.Normalize(start) };
+        var limitReached = false;
         queue.Enqueue((start, null, 0));
         while (queue.TryDequeue(out var current) && !ct.IsCancellationRequested)
         {
@@ -60,9 +61,8 @@ public sealed class CrawlConsumer : IConsumer<CrawlMessage>
                     foreach (var link in storedLinks)
                     {
                         if (Uri.TryCreate(link, UriKind.Absolute, out var child) &&
-                            string.Equals(child.Host, start.Host, StringComparison.OrdinalIgnoreCase) &&
-                            seen.Add(link) && seen.Count <= MaxPages)
-                            queue.Enqueue((child, currentUrl, current.Depth + 1));
+                            string.Equals(child.Host, start.Host, StringComparison.OrdinalIgnoreCase))
+                            TryQueue(child, currentUrl, current.Depth + 1);
                     }
                 }
                 continue;
@@ -93,13 +93,25 @@ public sealed class CrawlConsumer : IConsumer<CrawlMessage>
             {
                 if (!string.Equals(child.Host, start.Host, StringComparison.OrdinalIgnoreCase))
                     continue;
-                var normalized = UrlNormalizer.Normalize(child);
-                if (seen.Add(normalized) && seen.Count <= MaxPages)
-                    queue.Enqueue((child, UrlNormalizer.Normalize(absolute), current.Depth + 1));
+                TryQueue(child, UrlNormalizer.Normalize(absolute), current.Depth + 1);
             }
         }
-        if (seen.Count > MaxPages)
+        if (limitReached)
             _logger.LogWarning("Page limit {MaxPages} reached for job {JobId}", MaxPages, job.JobId);
+
+        void TryQueue(Uri url, string parent, int depth)
+        {
+            var normalized = UrlNormalizer.Normalize(url);
+            if (seen.Contains(normalized))
+                return;
+            if (seen.Count >= MaxPages)
+            {
+                limitReached = true;
+                return;
+            }
+            seen.Add(normalized);
+            queue.Enqueue((url, parent, depth));
+        }
     }
 
 }

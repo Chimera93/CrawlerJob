@@ -6,7 +6,7 @@ namespace CrawlerJob.Controllers;
 
 [ApiController]
 [Route("api/jobs")]
-public sealed class JobsController(CrawlStore store, IPublishEndpoint publisher) : ControllerBase
+public sealed class JobsController(ICrawlJobStore store, IPublishEndpoint publisher) : ControllerBase
 {
     [HttpPost]
     public async Task<IActionResult> Create(CreateJobRequest request, CancellationToken cancellationToken)

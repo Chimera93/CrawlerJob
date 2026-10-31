@@ -7,6 +7,7 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(builder.Configuration["Frontend:Origin"] ?? "http://localhost:5173")
         .AllowAnyHeader().AllowAnyMethod()));
 builder.Services.AddSingleton<CrawlStore>();
+builder.Services.AddSingleton<ICrawlJobStore>(services => services.GetRequiredService<CrawlStore>());
 builder.Services.AddHealthChecks();
 builder.Services.AddMassTransit(x =>
 {

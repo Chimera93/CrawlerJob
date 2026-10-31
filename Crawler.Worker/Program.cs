@@ -5,6 +5,8 @@ using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<CrawlStore>();
+builder.Services.AddSingleton<ICrawlJobStore>(services => services.GetRequiredService<CrawlStore>());
+builder.Services.AddSingleton<ICrawlExecutionStore>(services => services.GetRequiredService<CrawlStore>());
 builder.Services.AddHttpClient("crawler", client =>
     client.Timeout = TimeSpan.FromSeconds(10))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
@@ -18,12 +20,7 @@ builder.Services.AddMassTransit(x =>
     x.UsingRabbitMq((context, cfg) =>
     {
         cfg.Host(builder.Configuration["RabbitMq:Host"] ?? "localhost");
-        cfg.ReceiveEndpoint("crawl-jobs", endpoint =>
-        {
-            endpoint.UseMessageRetry(retry => retry.Intervals(
-                TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2)));
-            endpoint.ConfigureConsumer<CrawlConsumer>(context);
-        });
+        cfg.ConfigureCrawlEndpoint(context);
     });
 });
 var app = builder.Build();

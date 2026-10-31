@@ -13,7 +13,12 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="MassTransit.TestFramework" Version="8.3.6" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.16.0" />
+    <PackageReference Include="Testcontainers.RabbitMq" Version="4.16.0" />
     <ProjectReference Include="..\Crawler.Infrastructure\Crawler.Infrastructure.csproj" />
+    <ProjectReference Include="..\CrawlerJob\CrawlerJob.csproj" />
+    <ProjectReference Include="..\Crawler.Worker\Crawler.Worker.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Fixtures\links.html" CopyToOutputDirectory="PreserveNewest" />

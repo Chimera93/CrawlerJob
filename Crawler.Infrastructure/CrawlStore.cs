@@ -3,7 +3,7 @@ using Microsoft.Extensions.Configuration;
 
 namespace Crawler.Infrastructure;
 
-public sealed class CrawlStore(IConfiguration configuration)
+public sealed class CrawlStore(IConfiguration configuration) : ICrawlJobStore, ICrawlExecutionStore
 {
     private readonly string _connectionString = configuration.GetConnectionString("Crawler")
         ?? "Host=localhost;Port=5432;Database=crawler;Username=crawler;Password=crawler";

@@ -29,6 +29,7 @@ Stop with `docker compose down`. PostgreSQL data is kept in the `crawler-data` v
 - PostgreSQL is the source of truth. `crawl_jobs` is indexed by creation time; pages are unique on `(job_id, url)`, and edges are unique on `(job_id, parent_url, child_url)`. SQL reads for status/history/tree are separate from crawl execution.
 - PostgreSQL was chosen for a portable, lightweight Docker setup; pgAdmin is optional for manual database inspection. See [ADR 0001](docs/adr/0001-use-postgresql.md).
 - MassTransit provides typed `CrawlMessage { "jobId": "<guid>" }` publishing and RabbitMQ consumer setup. The worker consumes from `crawl-jobs`. MassTransit uses durable RabbitMQ topology and its default error transport; after retries are exhausted, the original message is moved to `crawl-jobs_error` and a `Fault<CrawlMessage>` is published. Inspect/replay or purge failed messages through RabbitMQ management.
+- Integration tests use Testcontainers to start isolated PostgreSQL and RabbitMQ containers; see [ADR 0004](docs/adr/0004-containerized-integration-tests.md).
 - MassTransit applies two in-memory retries after the original attempt (1s and 2s intervals). Exceptions from request timeouts, server errors, database access, or parsing are retried; HTTP 4xx responses and non-HTML pages are skipped. On the final attempt the worker marks the job failed and lets the exception propagate so MassTransit routes the failed message to its error queue. The in-memory retry policy is intentionally short and does not provide delayed redelivery across process restarts.
 - Page/edge uniqueness plus `ON CONFLICT DO NOTHING` makes persisted crawl results safe under redelivery. A redelivered partial crawl can resume traversal from already-persisted outgoing edges.
 - The starting domain is the initial URL's host (case-insensitive). Relative and fragment links are normalized; only HTTP(S) links contribute to the ratio. External HTTP(S) links are recorded as edges and count in the denominator but are not crawled. A page with no eligible links has ratio 0.
@@ -36,13 +37,17 @@ Stop with `docker compose down`. PostgreSQL data is kept in the `crawler-data` v
 
 ## Testing
 
-Run the .NET tests with:
+Run all .NET tests, including the container-backed crawl pipeline integration test, with Docker running:
 
 ```powershell
 dotnet test .\Crawler.Tests\Crawler.Tests.csproj
 ```
 
-Tests cover URL normalization, the domain ratio, and parsing a local HTML fixture. Docker Compose is the end-to-end local environment.
+Testcontainers starts and removes its own PostgreSQL and RabbitMQ containers, and the integration test serves deterministic crawl pages locally. No Docker Compose services or external websites are needed for tests. Run only the integration test with:
+
+```powershell
+dotnet test .\Crawler.Tests\Crawler.Tests.csproj --filter Category=Integration
+```
 
 ## Delivery approach
 
