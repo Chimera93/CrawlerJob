@@ -32,6 +32,9 @@ jobs:
       - name: Run unit tests
         run: dotnet test Crawler.Tests/Crawler.Tests.csproj --configuration Release --no-restore --filter "Category!=Integration"
 
+      - name: Run integration tests
+        run: dotnet test Crawler.Tests/Crawler.Tests.csproj --configuration Release --no-restore --filter "Category=Integration"
+
       - name: Start API dependencies for load test
         run: docker compose -p crawler-load up --build --detach api
 
@@ -60,6 +63,3 @@ jobs:
       - name: Stop API dependencies
         if: always()
         run: docker compose -p crawler-load down --volumes --remove-orphans
-
-      - name: Run integration tests
-        run: dotnet test Crawler.Tests/Crawler.Tests.csproj --configuration Release --no-restore --filter "Category=Integration"

@@ -15,7 +15,7 @@ The test needs to be bounded, avoid crawling third-party sites, and fit within a
 - Add a k6 scenario that sends concurrent `GET /api/jobs?page=1&pageSize=20` requests to the API backed by the Compose PostgreSQL and RabbitMQ services.
 - Use 10 VUs: ramp up over 5 seconds, sustain 10 VUs for 50 seconds, then ramp down over 5 seconds (about 60 seconds total). Pace each VU at one request per second to keep the workload bounded at roughly 10 requests per second.
 - Require a p95 response time below 1 second, fewer than 1% failed HTTP requests, and at least 99% successful response checks.
-- Run the CI stages in order: unit tests, API load test, then container-backed integration tests. Keep all stages in the existing `Build and test` job so the current required status check covers the load test as well.
+- Run the CI stages in order: unit tests, container-backed integration tests, then API load test. Keep all stages in the existing `Build and test` job so the current required status check covers the load test as well.
 - Keep the load scenario read-only and local to the CI Compose stack. Do not submit crawl jobs or depend on external websites.
 
 ## Consequences

@@ -93,7 +93,7 @@ Testcontainers starts and removes its own PostgreSQL and RabbitMQ containers. In
 dotnet test .\Crawler.Tests\Crawler.Tests.csproj --filter Category=Integration
 ```
 
-The CI workflow runs unit tests, then a k6 API load test, then the container-backed integration tests. The load test targets the read-only job-history endpoint with 10 concurrent virtual users, paced at about one request per second each, for about 60 seconds. It requires p95 latency below 1 second and fewer than 1% failed requests. This is a lightweight regression check, not a capacity claim; see [ADR 0007](docs/adr/0007-ci-api-load-test.md).
+The CI workflow runs unit tests, then the container-backed integration tests, then a k6 API load test. The load test targets the read-only job-history endpoint with 10 concurrent virtual users, paced at about one request per second each, for about 60 seconds. It requires p95 latency below 1 second and fewer than 1% failed requests. This is a lightweight regression check, not a capacity claim; see [ADR 0007](docs/adr/0007-ci-api-load-test.md).
 
 To run the load test locally, start the Compose API and its dependencies, install k6, then run:
 
@@ -103,7 +103,7 @@ k6 run --env BASE_URL=http://localhost:8080 .\load-tests\api-history.js
 
 ### Require CI on `main`
 
-The GitHub Actions workflow at `.github/workflows/ci.yml` runs unit tests, the API load test, and integration tests on pushes and pull requests targeting `main`. To require it before merging, create a branch protection rule or ruleset for `main` in the repository's **Settings**. Enable **Require status checks to pass before merging** and select **Build and test** as a required check. If the check is not listed yet, push the workflow and let it complete once, then return to the rule and select it. This repository setting requires GitHub repository admin access and cannot be enabled by the workflow file itself.
+The GitHub Actions workflow at `.github/workflows/ci.yml` runs unit tests, integration tests, and then the API load test on pushes and pull requests targeting `main`. To require it before merging, create a branch protection rule or ruleset for `main` in the repository's **Settings**. Enable **Require status checks to pass before merging** and select **Build and test** as a required check. If the check is not listed yet, push the workflow and let it complete once, then return to the rule and select it. This repository setting requires GitHub repository admin access and cannot be enabled by the workflow file itself.
 
 ## Delivery approach
 
@@ -115,6 +115,6 @@ Use a test-first loop where practical: derive a focused test from the requiremen
 
 - **Implemented first:** durable job lifecycle and clear API/worker boundaries, then bounded crawl persistence and messaging. Those paths establish the assignment's core asynchronous flow.
 - **Cut / simplified:** no authentication or rate limiting is built into the application; production deployments are expected to enforce both at the hosting boundary (for example, an identity-aware API gateway and ingress/load balancer policies). The local Compose setup is for development, not a production security boundary. Other omissions include configurable page limits, content rendering, and SSE. Direct publish follows the job insert rather than using a transactional outbox.
-- **Next with more time:** add a transactional outbox and stronger poison-message replay/observability, delayed redelivery across process restarts, load/performance tests, crawl politeness limits, and a UI pagination control. The current worker's 200-page ceiling is a constant and should become configuration.
+- **Next with more time:** add a transactional outbox and stronger poison-message replay/observability, delayed redelivery across process restarts, a capacity/throughput test with an explicit target, crawl politeness limits, and a UI pagination control. The current worker's 200-page ceiling is a constant and should become configuration. The CI k6 scenario is intentionally a short regression check, not a capacity test; see [ADR 0008](docs/adr/0008-defer-capacity-testing.md).
 
 See [IMPLEMENTATION-NOTES.md](IMPLEMENTATION-NOTES.md) for the ongoing requirement breakdown and decision log.
