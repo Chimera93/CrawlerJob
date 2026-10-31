@@ -28,6 +28,68 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Read_endpoints_return_persisted_job_tree_and_history()
+    {
+        var jobId = Guid.NewGuid();
+        const string rootUrl = "https://read-path.example/";
+        const string childUrl = "https://read-path.example/child";
+        await fixture.Store.CreateJobAsync(jobId, rootUrl, 1, CancellationToken.None);
+        await fixture.Store.SetRunningAsync(jobId, CancellationToken.None);
+        await fixture.Store.SavePageAsync(
+            new CrawlPage(jobId, rootUrl, null, 0, 0.5),
+            [childUrl, "https://outside.example/"],
+            CancellationToken.None);
+        await fixture.Store.SavePageAsync(
+            new CrawlPage(jobId, childUrl, rootUrl, 1, 1),
+            [],
+            CancellationToken.None);
+        await fixture.Store.CompleteAsync(jobId, CancellationToken.None);
+
+        await using var api = new ApiFactory(
+            fixture.PostgresConnectionString, fixture.RabbitMq.GetConnectionString());
+        using var client = api.CreateClient();
+
+        using var detailResponse = await client.GetAsync($"/api/jobs/{jobId}");
+        Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
+        var detail = await detailResponse.Content.ReadFromJsonAsync<CrawlJob>();
+        Assert.NotNull(detail);
+        Assert.Equal(jobId, detail.JobId);
+        Assert.Equal(rootUrl, detail.Url);
+        Assert.Equal("Completed", detail.Status);
+        Assert.Equal(1, detail.MaxDepth);
+        Assert.Equal(2, detail.PagesCrawled);
+        Assert.NotNull(detail.CompletedAt);
+
+        using var treeResponse = await client.GetAsync($"/api/jobs/{jobId}/tree");
+        Assert.Equal(HttpStatusCode.OK, treeResponse.StatusCode);
+        var tree = await treeResponse.Content.ReadFromJsonAsync<IReadOnlyList<PageNode>>();
+        var root = Assert.Single(tree!, node => node.Url == rootUrl);
+        Assert.Equal(0.5, root.DomainLinkRatio);
+        var child = Assert.Single(root.Children);
+        Assert.Equal(childUrl, child.Url);
+        Assert.Equal(1, child.DomainLinkRatio);
+        Assert.Empty(child.Children);
+
+        using var historyResponse = await client.GetAsync("/api/jobs?page=1&pageSize=100");
+        Assert.Equal(HttpStatusCode.OK, historyResponse.StatusCode);
+        var history = await historyResponse.Content.ReadFromJsonAsync<HistoryResult>();
+        Assert.NotNull(history);
+        Assert.Equal(1, history.Page);
+        Assert.Equal(100, history.PageSize);
+        Assert.Contains(history.Items, item => item.JobId == jobId && item.Status == "Completed");
+
+        using var missingJobResponse = await client.GetAsync($"/api/jobs/{Guid.NewGuid()}");
+        Assert.Equal(HttpStatusCode.NotFound, missingJobResponse.StatusCode);
+        using var missingTreeResponse = await client.GetAsync($"/api/jobs/{Guid.NewGuid()}/tree");
+        Assert.Equal(HttpStatusCode.NotFound, missingTreeResponse.StatusCode);
+        using var invalidPageResponse = await client.GetAsync("/api/jobs?page=0");
+        Assert.Equal(HttpStatusCode.BadRequest, invalidPageResponse.StatusCode);
+        using var invalidPageSizeResponse = await client.GetAsync("/api/jobs?pageSize=101");
+        Assert.Equal(HttpStatusCode.BadRequest, invalidPageSizeResponse.StatusCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Api_submission_is_retried_crawled_and_persisted()
     {
         var rootRequests = 0;
