@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Npgsql;
 using Testcontainers.PostgreSql;
 using Testcontainers.RabbitMq;
 using Xunit;
@@ -26,6 +27,72 @@ public sealed class CrawlPipelineCollection : ICollectionFixture<IntegrationFixt
 [Collection(CrawlPipelineCollection.Name)]
 public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
 {
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Concurrent_duplicate_delivery_does_not_duplicate_persisted_pages_or_edges()
+    {
+        var rootRequests = 0;
+        var childRequests = 0;
+        var childRequestsStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseChildRequests = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var site = await StartTestSiteAsync(() =>
+        {
+            Interlocked.Increment(ref rootRequests);
+            return Results.Content("<a href='/child'>child</a>", "text/html");
+        }, async () =>
+        {
+            if (Interlocked.Increment(ref childRequests) == 2)
+                childRequestsStarted.TrySetResult();
+            await releaseChildRequests.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            return Results.Content("<p>child page</p>", "text/html");
+        });
+
+        try
+        {
+            var store = new CompletionCountingStore(fixture.Store);
+            await using var provider = CreateWorkerProvider(
+                store, fixture.RabbitMq.GetConnectionString(), concurrentMessageLimit: 2);
+            var bus = provider.GetRequiredService<IBusControl>();
+            await bus.StartAsync();
+            try
+            {
+                await using var api = new ApiFactory(
+                    fixture.PostgresConnectionString, fixture.RabbitMq.GetConnectionString());
+                using var client = api.CreateClient();
+                var jobId = await SubmitJobAsync(client, site.RootUrl, 1);
+
+                await WaitForCountAsync(() => Volatile.Read(ref childRequests), 1);
+                await bus.Publish(new CrawlMessage(jobId));
+                await childRequestsStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                releaseChildRequests.TrySetResult();
+                await store.BothCompletions.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+                var job = await fixture.Store.GetJobAsync(jobId, CancellationToken.None);
+                Assert.NotNull(job);
+                Assert.Equal("Completed", job.Status);
+                Assert.Equal(2, job.PagesCrawled);
+                Assert.Equal(1, Volatile.Read(ref rootRequests));
+                Assert.Equal(2, Volatile.Read(ref childRequests));
+
+                var (pages, edges) = await CountPersistedRowsAsync(fixture.PostgresConnectionString, jobId);
+                Assert.Equal(2, pages);
+                Assert.Equal(1, edges);
+            }
+            finally
+            {
+                releaseChildRequests.TrySetResult();
+                await bus.StopAsync();
+            }
+        }
+        finally
+        {
+            releaseChildRequests.TrySetResult();
+            await site.App.DisposeAsync();
+        }
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task Read_endpoints_return_persisted_job_tree_and_history()
@@ -86,6 +153,30 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
         Assert.Equal(HttpStatusCode.BadRequest, invalidPageResponse.StatusCode);
         using var invalidPageSizeResponse = await client.GetAsync("/api/jobs?pageSize=101");
         Assert.Equal(HttpStatusCode.BadRequest, invalidPageSizeResponse.StatusCode);
+    }
+
+    private static async Task WaitForCountAsync(Func<int> count, int expected)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (count() < expected)
+            await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
+    }
+
+    private static async Task<(long Pages, long Edges)> CountPersistedRowsAsync(
+        string connectionString, Guid jobId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand("""
+            SELECT
+                (SELECT COUNT(*) FROM crawl_pages WHERE job_id = @id),
+                (SELECT COUNT(*) FROM crawl_edges WHERE job_id = @id)
+            """, connection);
+        command.Parameters.AddWithValue("id", jobId);
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+            throw new InvalidOperationException("The persisted crawl row count query returned no result.");
+        return (reader.GetInt64(0), reader.GetInt64(1));
     }
 
     [Fact]
@@ -161,7 +252,7 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
         }, () =>
         {
             Interlocked.Increment(ref childRequests);
-            return Results.Content("<p>child page</p>", "text/html");
+            return Task.FromResult<IResult>(Results.Content("<p>child page</p>", "text/html"));
         });
 
         try
@@ -213,8 +304,8 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
         }, () =>
         {
             if (Interlocked.Increment(ref childRequests) == 1)
-                return Results.StatusCode((int)HttpStatusCode.ServiceUnavailable);
-            return Results.Content("<p>child page</p>", "text/html");
+                return Task.FromResult<IResult>(Results.StatusCode((int)HttpStatusCode.ServiceUnavailable));
+            return Task.FromResult<IResult>(Results.Content("<p>child page</p>", "text/html"));
         });
 
         try
@@ -239,6 +330,10 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
                 var root = Assert.Single(tree, node => node.Url == site.RootUrl);
                 Assert.Single(root.Children);
                 Assert.Equal(1, root.DomainLinkRatio);
+
+                var (pages, edges) = await CountPersistedRowsAsync(fixture.PostgresConnectionString, jobId);
+                Assert.Equal(2, pages);
+                Assert.Equal(1, edges);
             }
             finally
             {
@@ -260,7 +355,8 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
         return json.RootElement.GetProperty("jobId").GetGuid();
     }
 
-    private static ServiceProvider CreateWorkerProvider(ICrawlExecutionStore store, string rabbitMqConnection)
+    private static ServiceProvider CreateWorkerProvider(ICrawlExecutionStore store, string rabbitMqConnection,
+        int? concurrentMessageLimit = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -275,20 +371,24 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
             registration.UsingRabbitMq((context, configurator) =>
             {
                 configurator.Host(new Uri(rabbitMqConnection));
-                configurator.ConfigureCrawlEndpoint(context);
+                configurator.ConfigureCrawlEndpoint(context,
+                    concurrentMessageLimit: concurrentMessageLimit);
             });
         });
         return services.BuildServiceProvider();
     }
 
     private static async Task<(WebApplication App, string RootUrl)> StartTestSiteAsync(
-        Func<IResult> rootResponse, Func<IResult>? childResponse = null)
+        Func<IResult> rootResponse, Func<Task<IResult>>? childResponse = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
         var app = builder.Build();
         app.MapGet("/", () => rootResponse());
-        app.MapGet("/child", () => childResponse?.Invoke() ?? Results.Content("<p>child page</p>", "text/html"));
+        app.MapGet("/child", async () =>
+            childResponse is null
+                ? Results.Content("<p>child page</p>", "text/html")
+                : await childResponse());
         await app.StartAsync();
         var addresses = app.Services.GetRequiredService<IServer>()
             .Features.Get<IServerAddressesFeature>()?.Addresses
@@ -349,6 +449,32 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
             inner.SavePageAsync(page, children, ct);
         public Task CompleteAsync(Guid id, CancellationToken ct) => inner.CompleteAsync(id, ct);
         public Task FailAsync(Guid id, string reason, CancellationToken ct) => inner.FailAsync(id, reason, ct);
+    }
+
+    private sealed class CompletionCountingStore(ICrawlExecutionStore inner) : ICrawlExecutionStore
+    {
+        private int _completionCount;
+        public TaskCompletionSource BothCompletions { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<CrawlJob?> GetJobAsync(Guid id, CancellationToken ct) => inner.GetJobAsync(id, ct);
+        public Task SetRunningAsync(Guid id, CancellationToken ct) => inner.SetRunningAsync(id, ct);
+        public Task<bool> IsPageStoredAsync(Guid id, string url, CancellationToken ct) =>
+            inner.IsPageStoredAsync(id, url, ct);
+        public Task<IReadOnlyList<string>> GetOutgoingLinksAsync(Guid id, string parentUrl, CancellationToken ct) =>
+            inner.GetOutgoingLinksAsync(id, parentUrl, ct);
+        public Task SavePageAsync(CrawlPage page, IReadOnlyCollection<string> children, CancellationToken ct) =>
+            inner.SavePageAsync(page, children, ct);
+
+        public async Task CompleteAsync(Guid id, CancellationToken ct)
+        {
+            await inner.CompleteAsync(id, ct);
+            if (Interlocked.Increment(ref _completionCount) == 2)
+                BothCompletions.TrySetResult();
+        }
+
+        public Task FailAsync(Guid id, string reason, CancellationToken ct) =>
+            inner.FailAsync(id, reason, ct);
     }
 }
 

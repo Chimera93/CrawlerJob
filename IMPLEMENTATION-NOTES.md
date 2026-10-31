@@ -6,21 +6,21 @@ This is the working breakdown for the home assignment. Update the status and dec
 
 | Area | Required behavior | Status |
 |---|---|---|
-| Crawl API | Validate and create jobs; return a job ID; expose job summary, tree, paginated history, and health | Implemented; needs verification |
-| Worker | Consume jobs asynchronously; crawl HTML pages to a bounded depth/page count; calculate each page's domain link ratio | Implemented; needs verification |
-| Messaging | RabbitMQ, durable delivery, at-least-once/idempotent processing, retry transient failures, and dead-letter poison messages | Implemented; needs verification |
-| SQL storage | Persist job lifecycle, pages, and parent-child edges; avoid duplicate rows; support history and tree reads | Implemented; needs verification |
-| React UI | Start crawl, poll job status/progress, render results as a tree, and browse history; include loading/error states | Implemented; needs verification |
-| Tests | URL normalization and domain-ratio unit tests, plus a local HTML fixture parser test | Implemented; 3 tests pass |
-| Delivery | Docker Compose for API, worker, database, and broker; README with run steps, choices, limitations, and priorities | Implemented; container build not verified because Docker daemon is unavailable |
-| Observability | Structured job-aware logs and health endpoints | In progress |
+| Crawl API | Validate and create jobs; return a job ID; expose job summary, tree, paginated history, and health | Implemented; submission and read paths covered by API integration tests |
+| Worker | Consume jobs asynchronously; crawl HTML pages to a bounded depth/page count; calculate each page's domain link ratio | Implemented; crawl rules and retry behavior covered by unit and integration tests |
+| Messaging | RabbitMQ, durable delivery, at-least-once/idempotent processing, retry transient failures, and dead-letter poison messages | Implemented; real-broker retry, duplicate delivery, and partial recovery tested; exhausted-retry/error-queue path remains untested |
+| SQL storage | Persist job lifecycle, pages, and parent-child edges; avoid duplicate rows; support history and tree reads | Implemented; real PostgreSQL persistence and API reads covered by Testcontainers |
+| React UI | Start crawl, poll job status/progress, render results as a tree, and browse history; include loading/error states | Implemented in `frontend/`; browser-level end-to-end verification remains |
+| Tests | Unit, API/worker behavior, and container-backed integration tests | Implemented; 16 tests pass |
+| Delivery | Docker Compose for API, worker, database, broker, and frontend; README with run steps, choices, limitations, and priorities | Implemented; Testcontainers integration passes; full Compose stack/browser smoke test remains |
+| Observability | Structured job-aware logs and health endpoints | Implemented; operational behavior still needs a Compose smoke test |
 
 ## Component boundaries
 
 - **API (`CrawlerJob`)** owns HTTP validation and read/create endpoints. It persists a job before publishing its message.
 - **Infrastructure (`Crawler.Infrastructure`)** shares message/domain types, PostgreSQL access, URL normalization, and ratio calculation. MassTransit handles publishing and consumption in the API and worker hosts.
 - **Worker (`Crawler.Worker`)** owns message consumption and crawl execution; it stores discovered page and edge records through the shared store.
-- **React client** will call the API only; it will poll while jobs are pending/running.
+- **React client** calls the API only; it polls while jobs are pending/running.
 - **PostgreSQL** is the durable source of truth. **RabbitMQ** carries job-start messages; the worker must safely handle redelivery.
 
 ## Architecture decisions
@@ -45,34 +45,35 @@ Deliver the system as end-to-end user capabilities rather than finishing every l
 
 | Rank | Vertical slice | User-visible outcome and acceptance checks | Status |
 |---|---|---|---|
-| 1 | Submit and acknowledge a crawl | User submits a valid HTTP(S) URL; API returns a job ID; the job is stored as Pending and a typed message is published. Invalid URL/depth is rejected. | Implemented; needs API/message integration coverage |
-| 2 | Crawl a bounded site and calculate page metrics | Worker fetches HTML, resolves relative URLs, ignores fragments and non-HTTP schemes, avoids duplicate URLs, respects depth/page caps, and computes the starting-host link ratio. | Implemented; core URL/parser/ratio tests pass; crawl-loop cases need more coverage |
-| 3 | Track lifecycle and persist idempotent results | Job moves through Running to Completed or Failed; progress updates; pages and parent-child edges persist once despite redelivery. | Implemented; needs persistence/redelivery integration coverage |
-| 4 | Inspect a completed crawl | User opens job details and sees timestamps, progress, failure reason where applicable, and a nested result tree with ratios. | Implemented; needs API/UI end-to-end verification |
-| 5 | Find prior jobs | User opens history, sees recent jobs and statuses, and can navigate back to details. | Implemented; needs UI/API end-to-end verification |
-| 6 | Run and operate the system locally | Compose starts API, worker, PostgreSQL, RabbitMQ, and React; health endpoints and structured job-aware logs support diagnosis; failed messages reach MassTransit's error queue. | Implemented; Compose syntax validated; image/runtime verification blocked by unavailable Docker daemon |
+| 1 | Submit and acknowledge a crawl | User submits a valid HTTP(S) URL; API returns a job ID; the job is persisted and a typed message is published. Invalid URL/depth is rejected. | Implemented; unit and real-broker/database API integration coverage |
+| 2 | Crawl a bounded site and calculate page metrics | Worker fetches HTML, resolves relative URLs, ignores fragments and non-HTTP schemes, avoids duplicate URLs, respects depth/page caps, and computes the starting-host link ratio. | Implemented; focused unit and worker tests |
+| 3 | Track lifecycle and persist idempotent results | Job moves through Running to Completed or Failed; progress updates; pages and parent-child edges persist once despite redelivery. | Implemented; real PostgreSQL/RabbitMQ tests cover retries, concurrent and completed-job duplicate delivery, and partial-crawl recovery |
+| 4 | Inspect a completed crawl | User opens job details and sees timestamps, progress, failure reason where applicable, and a nested result tree with ratios. | Implemented; API read paths tested against containerized PostgreSQL; browser flow remains unverified |
+| 5 | Find prior jobs | User opens history, sees recent jobs and statuses, and can navigate back to details. | Implemented; API pagination and history response tested; browser flow remains unverified |
+| 6 | Run and operate the system locally | Compose starts API, worker, PostgreSQL, RabbitMQ, and React; health endpoints and structured job-aware logs support diagnosis; failed messages reach MassTransit's error queue. | Compose and Testcontainers configurations exist; full Compose/UI smoke test and exhausted-retry/error-queue verification remain |
 
 ### Test-driven implementation decision
 
 For each slice, derive focused tests from the user requirement before changing implementation: write a failing test for a behavior or edge case, implement the smallest change that passes, then refactor while keeping the tests green. Prefer fast unit tests for deterministic domain rules; use fixture-backed tests for HTML parsing and integration tests only where behavior crosses process, broker, or database boundaries.
 
-Tests should assert user-facing behavior and meaningful edge cases, not implementation details. The current three tests cover URL normalization, HTTP(S)-only domain-ratio calculation, and parsing a local HTML fixture. They were added after the initial implementation, so they are not claimed as strict test-first development; apply the red/green/refactor loop to remaining coverage and future changes.
+Tests should assert user-facing behavior and meaningful edge cases, not implementation details. The current 15 tests cover URL normalization, HTTP(S)-only domain-ratio calculation, HTML parsing, API validation/submission, bounded crawling, retry/redelivery, partial-crawl recovery, persisted API read paths, and the PostgreSQL/RabbitMQ integration pipeline. They were added as the slices were verified; the original implementation was not developed under a strict test-first process.
 
 ### Test backlog mapped to slices
 
-1. **Submit job:** URL scheme validation and max-depth boundaries; API persists and publishes a job.
-2. **Crawl rules:** relative/fragment normalization, duplicate handling, excluded schemes, ratio for zero links and mixed internal/external links, depth and page caps, and non-HTML handling.
-3. **Lifecycle/idempotency:** duplicate delivery creates no duplicate page/edge rows; transient failures retry; exhausted retries fail the job and route the message to the error queue.
-4. **Results:** tree parent-child structure, external outgoing links, and empty results for a job with no stored pages.
-5. **History:** newest-first ordering and pagination boundaries.
-6. **Operations:** health checks and Compose-backed smoke test when Docker is available.
+1. **Submit job:** URL scheme validation and max-depth boundaries; API persists and publishes a job — covered.
+2. **Crawl rules:** URL normalization, duplicate handling, eligible schemes, link ratios, depth/page caps, retries, and non-HTML behavior — covered by unit/worker/integration tests.
+3. **Lifecycle/idempotency:** concurrent and repeated completed-job delivery do not duplicate results; transient failures retry; partial work resumes without duplicate pages/edges — covered. Exhausted retries and error-queue routing remain.
+4. **Results:** API detail/tree reads, parent-child structure, metrics, and missing-job behavior — covered; external-edge and empty-result API cases can use more coverage if required.
+5. **History:** API history response and invalid pagination — covered; newest-first ordering and multi-page boundary behavior can use more coverage.
+6. **Operations:** run the complete Docker Compose stack and smoke-test API, worker, health endpoints, and UI; verify the exhausted-retry error queue.
 
 ## Progress / open work
 
 - Implemented API routes, PostgreSQL schema/access, MassTransit RabbitMQ publishing/consumption, worker crawl loop, React screens, and Compose.
-- Still to do: expand tests using the test-first approach, especially API submission, crawl depth/cap, persistence idempotency, lifecycle, history, and tree behavior. Container image build could not be exercised because the local Docker daemon is unavailable.
-- No cancellation endpoint or runtime-configurable page limit is planned for the first pass; these are optional or lower priority than required behavior.
+- All 16 .NET tests pass. Testcontainers integration tests have successfully run against real PostgreSQL and RabbitMQ; they also exercise the API through HTTP and crawl against a local deterministic HTTP server.
+- Remaining verification: full Compose/browser smoke test and the exhausted-retry/error-queue path. Testcontainers tests require Docker; the UI exists but has not been browser-tested in this assessment.
+- Known first-pass cuts: no transactional outbox, cancellation endpoint, authentication, rate limiting, configurable page limit, or SSRF protections. The outbox gap means a crash between job persistence and message publish can leave a pending job without a queued message.
 
 ## Final handoff summary
 
-Fill this in after verification: what shipped, what was prioritized, what was cut, and what should be done next.
+The assessment delivers a .NET 8 API and worker, PostgreSQL persistence, RabbitMQ messaging, a React UI, and Docker Compose. Verification prioritizes the submission-to-crawl flow, bounded crawl rules, retry/redelivery behavior, persistence, API read paths, and Testcontainers isolation. Remaining work is a full Compose/UI smoke test and exhausted-retry/error-queue verification. Deferred items include an outbox, cancellation, authentication, rate limiting, configurable crawl limits, and SSRF protections.
