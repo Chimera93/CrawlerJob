@@ -16,6 +16,7 @@
     <PackageReference Include="MassTransit.TestFramework" Version="8.3.6" />
     <ProjectReference Include="..\Crawler.Infrastructure\Crawler.Infrastructure.csproj" />
     <ProjectReference Include="..\CrawlerJob\CrawlerJob.csproj" />
+    <ProjectReference Include="..\Crawler.Worker\Crawler.Worker.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Fixtures\links.html" CopyToOutputDirectory="PreserveNewest" />

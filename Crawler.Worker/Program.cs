@@ -5,6 +5,8 @@ using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<CrawlStore>();
+builder.Services.AddSingleton<ICrawlJobStore>(services => services.GetRequiredService<CrawlStore>());
+builder.Services.AddSingleton<ICrawlExecutionStore>(services => services.GetRequiredService<CrawlStore>());
 builder.Services.AddHttpClient("crawler", client =>
     client.Timeout = TimeSpan.FromSeconds(10))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
