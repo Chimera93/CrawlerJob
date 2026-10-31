@@ -8,10 +8,10 @@ This is the working breakdown for the home assignment. Update the status and dec
 |---|---|---|
 | Crawl API | Validate and create jobs; return a job ID; expose job summary, tree, paginated history, and health | Implemented; submission and read paths covered by API integration tests |
 | Worker | Consume jobs asynchronously; crawl HTML pages to a bounded depth/page count; calculate each page's domain link ratio | Implemented; crawl rules and retry behavior covered by unit and integration tests |
-| Messaging | RabbitMQ, durable delivery, at-least-once/idempotent processing, retry transient failures, and dead-letter poison messages | Implemented; real-broker retry, duplicate delivery, and partial recovery tested; exhausted-retry/error-queue path remains untested |
+| Messaging | RabbitMQ, durable delivery, at-least-once/idempotent processing, retry transient failures, and dead-letter poison messages | Implemented; Testcontainers verifies real-broker retries, failed-job state, and error-queue delivery |
 | SQL storage | Persist job lifecycle, pages, and parent-child edges; avoid duplicate rows; support history and tree reads | Implemented; real PostgreSQL persistence and API reads covered by Testcontainers |
 | React UI | Start crawl, poll job status/progress, render results as a tree, and browse history; include loading/error states | Implemented in `frontend/`; browser-level end-to-end verification remains |
-| Tests | Unit, API/worker behavior, and container-backed integration tests | Implemented; 16 tests pass |
+| Tests | Unit, API/worker behavior, and container-backed integration tests | Implemented; 17 tests pass |
 | Delivery | Docker Compose for API, worker, database, broker, and frontend; README with run steps, choices, limitations, and priorities | Implemented; Testcontainers integration passes; full Compose stack/browser smoke test remains |
 | Observability | Structured job-aware logs and health endpoints | Implemented; operational behavior still needs a Compose smoke test |
 
@@ -50,30 +50,30 @@ Deliver the system as end-to-end user capabilities rather than finishing every l
 | 3 | Track lifecycle and persist idempotent results | Job moves through Running to Completed or Failed; progress updates; pages and parent-child edges persist once despite redelivery. | Implemented; real PostgreSQL/RabbitMQ tests cover retries, concurrent and completed-job duplicate delivery, and partial-crawl recovery |
 | 4 | Inspect a completed crawl | User opens job details and sees timestamps, progress, failure reason where applicable, and a nested result tree with ratios. | Implemented; API read paths tested against containerized PostgreSQL; browser flow remains unverified |
 | 5 | Find prior jobs | User opens history, sees recent jobs and statuses, and can navigate back to details. | Implemented; API pagination and history response tested; browser flow remains unverified |
-| 6 | Run and operate the system locally | Compose starts API, worker, PostgreSQL, RabbitMQ, and React; health endpoints and structured job-aware logs support diagnosis; failed messages reach MassTransit's error queue. | Compose and Testcontainers configurations exist; full Compose/UI smoke test and exhausted-retry/error-queue verification remain |
+| 6 | Run and operate the system locally | Compose starts API, worker, PostgreSQL, RabbitMQ, and React; health endpoints and structured job-aware logs support diagnosis; failed messages reach MassTransit's error queue. | Error queue verified in Testcontainers; full Compose/UI smoke test remains |
 
 ### Test-driven implementation decision
 
 For each slice, derive focused tests from the user requirement before changing implementation: write a failing test for a behavior or edge case, implement the smallest change that passes, then refactor while keeping the tests green. Prefer fast unit tests for deterministic domain rules; use fixture-backed tests for HTML parsing and integration tests only where behavior crosses process, broker, or database boundaries.
 
-Tests should assert user-facing behavior and meaningful edge cases, not implementation details. The current 15 tests cover URL normalization, HTTP(S)-only domain-ratio calculation, HTML parsing, API validation/submission, bounded crawling, retry/redelivery, partial-crawl recovery, persisted API read paths, and the PostgreSQL/RabbitMQ integration pipeline. They were added as the slices were verified; the original implementation was not developed under a strict test-first process.
+Tests should assert user-facing behavior and meaningful edge cases, not implementation details. The current 17 tests cover URL normalization, HTTP(S)-only domain-ratio calculation, HTML parsing, API validation/submission, bounded crawling, retry/redelivery, partial-crawl recovery, exhausted-retry error-queue delivery, persisted API read paths, and the PostgreSQL/RabbitMQ integration pipeline. They were added as the slices were verified; the original implementation was not developed under a strict test-first process.
 
 ### Test backlog mapped to slices
 
 1. **Submit job:** URL scheme validation and max-depth boundaries; API persists and publishes a job — covered.
 2. **Crawl rules:** URL normalization, duplicate handling, eligible schemes, link ratios, depth/page caps, retries, and non-HTML behavior — covered by unit/worker/integration tests.
-3. **Lifecycle/idempotency:** concurrent and repeated completed-job delivery do not duplicate results; transient failures retry; partial work resumes without duplicate pages/edges — covered. Exhausted retries and error-queue routing remain.
+3. **Lifecycle/idempotency:** concurrent and repeated completed-job delivery do not duplicate results; transient failures retry; partial work resumes without duplicate pages/edges; exhausted retries fail the job and route the message to the error queue — covered.
 4. **Results:** API detail/tree reads, parent-child structure, metrics, and missing-job behavior — covered; external-edge and empty-result API cases can use more coverage if required.
 5. **History:** API history response and invalid pagination — covered; newest-first ordering and multi-page boundary behavior can use more coverage.
-6. **Operations:** run the complete Docker Compose stack and smoke-test API, worker, health endpoints, and UI; verify the exhausted-retry error queue.
+6. **Operations:** run the complete Docker Compose stack and smoke-test API, worker, health endpoints, and UI.
 
 ## Progress / open work
 
 - Implemented API routes, PostgreSQL schema/access, MassTransit RabbitMQ publishing/consumption, worker crawl loop, React screens, and Compose.
 - All 16 .NET tests pass. Testcontainers integration tests have successfully run against real PostgreSQL and RabbitMQ; they also exercise the API through HTTP and crawl against a local deterministic HTTP server.
-- Remaining verification: full Compose/browser smoke test and the exhausted-retry/error-queue path. Testcontainers tests require Docker; the UI exists but has not been browser-tested in this assessment.
+- Remaining verification: full Compose/browser smoke test. Testcontainers tests require Docker; the UI exists but has not been browser-tested in this assessment.
 - Known first-pass cuts: no transactional outbox, cancellation endpoint, authentication, rate limiting, configurable page limit, or SSRF protections. The outbox gap means a crash between job persistence and message publish can leave a pending job without a queued message.
 
 ## Final handoff summary
 
-The assessment delivers a .NET 8 API and worker, PostgreSQL persistence, RabbitMQ messaging, a React UI, and Docker Compose. Verification prioritizes the submission-to-crawl flow, bounded crawl rules, retry/redelivery behavior, persistence, API read paths, and Testcontainers isolation. Remaining work is a full Compose/UI smoke test and exhausted-retry/error-queue verification. Deferred items include an outbox, cancellation, authentication, rate limiting, configurable crawl limits, and SSRF protections.
+The assessment delivers a .NET 8 API and worker, PostgreSQL persistence, RabbitMQ messaging, a React UI, and Docker Compose. Verification prioritizes the submission-to-crawl flow, bounded crawl rules, retry/redelivery behavior, persistence, API read paths, and Testcontainers isolation. Remaining work is a full Compose/UI smoke test. Deferred items include an outbox, authentication, rate limiting, configurable crawl limits, and CI; the application-level rate-limiting decision and production boundary are documented during follow-up.
