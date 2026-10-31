@@ -13,7 +13,9 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="MassTransit.TestFramework" Version="8.3.6" />
     <ProjectReference Include="..\Crawler.Infrastructure\Crawler.Infrastructure.csproj" />
+    <ProjectReference Include="..\CrawlerJob\CrawlerJob.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Fixtures\links.html" CopyToOutputDirectory="PreserveNewest" />
