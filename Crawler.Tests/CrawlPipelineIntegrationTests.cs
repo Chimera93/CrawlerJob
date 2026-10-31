@@ -346,6 +346,61 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
         }
     }
 
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Exhausted_retries_fail_job_and_route_message_to_error_queue()
+    {
+        var requests = 0;
+        var site = await StartTestSiteAsync(() =>
+        {
+            Interlocked.Increment(ref requests);
+            return Results.StatusCode((int)HttpStatusCode.ServiceUnavailable);
+        });
+        var failedMessage = new TaskCompletionSource<CrawlMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        try
+        {
+            await using var provider = CreateWorkerProvider(fixture.Store, fixture.RabbitMq.GetConnectionString());
+            var bus = provider.GetRequiredService<IBusControl>();
+            await bus.StartAsync();
+            try
+            {
+                await using var api = new ApiFactory(
+                    fixture.PostgresConnectionString, fixture.RabbitMq.GetConnectionString());
+                using var client = api.CreateClient();
+                var jobId = await SubmitJobAsync(client, site.RootUrl, 1);
+                var job = await WaitForTerminalJobAsync(fixture.Store, jobId);
+
+                Assert.Equal("Failed", job.Status);
+                Assert.Contains("503", job.FailureReason);
+                Assert.Equal(3, Volatile.Read(ref requests));
+
+                await using var errorQueueObserver = CreateErrorQueueObserver(
+                    fixture.RabbitMq.GetConnectionString(), failedMessage);
+                var errorBus = errorQueueObserver.GetRequiredService<IBusControl>();
+                await errorBus.StartAsync();
+                try
+                {
+                    var message = await failedMessage.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.Equal(jobId, message.JobId);
+                }
+                finally
+                {
+                    await errorBus.StopAsync();
+                }
+            }
+            finally
+            {
+                await bus.StopAsync();
+            }
+        }
+        finally
+        {
+            await site.App.DisposeAsync();
+        }
+    }
+
     private static async Task<Guid> SubmitJobAsync(HttpClient client, string url, int maxDepth)
     {
         var response = await client.PostAsJsonAsync("/api/jobs", new { url, maxDepth });
@@ -373,6 +428,27 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
                 configurator.Host(new Uri(rabbitMqConnection));
                 configurator.ConfigureCrawlEndpoint(context,
                     concurrentMessageLimit: concurrentMessageLimit);
+            });
+        });
+        return services.BuildServiceProvider();
+    }
+
+    private static ServiceProvider CreateErrorQueueObserver(string rabbitMqConnection,
+        TaskCompletionSource<CrawlMessage> received)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMassTransit(registration =>
+        {
+            registration.UsingRabbitMq((_, configurator) =>
+            {
+                configurator.Host(new Uri(rabbitMqConnection));
+                configurator.ReceiveEndpoint("crawl-jobs_error",
+                    endpoint => endpoint.Handler<CrawlMessage>(context =>
+                    {
+                        received.TrySetResult(context.Message);
+                        return Task.CompletedTask;
+                    }));
             });
         });
         return services.BuildServiceProvider();
