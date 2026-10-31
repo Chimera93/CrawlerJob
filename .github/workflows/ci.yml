@@ -26,5 +26,40 @@ jobs:
           cache: true
           cache-dependency-path: Crawler.Tests/Crawler.Tests.csproj
 
-      - name: Run tests
-        run: dotnet test Crawler.Tests/Crawler.Tests.csproj --configuration Release
+      - name: Restore
+        run: dotnet restore Crawler.Tests/Crawler.Tests.csproj
+
+      - name: Run unit tests
+        run: dotnet test Crawler.Tests/Crawler.Tests.csproj --configuration Release --no-restore --filter "Category!=Integration"
+
+      - name: Start API dependencies for load test
+        run: docker compose -p crawler-load up --build --detach api
+
+      - name: Wait for API
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent "http://localhost:8080/api/jobs?page=1&pageSize=1" > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not become ready for the load test."
+          docker compose -p crawler-load logs api db rabbitmq
+          exit 1
+
+      - name: Run API load test
+        run: >-
+          docker run --rm
+          --network crawler-load_default
+          -v "$GITHUB_WORKSPACE/load-tests:/scripts:ro"
+          -e BASE_URL=http://api:8080
+          grafana/k6:0.54.0
+          run /scripts/api-history.js
+
+      - name: Stop API dependencies
+        if: always()
+        run: docker compose -p crawler-load down --volumes --remove-orphans
+
+      - name: Run integration tests
+        run: dotnet test Crawler.Tests/Crawler.Tests.csproj --configuration Release --no-restore --filter "Category=Integration"
