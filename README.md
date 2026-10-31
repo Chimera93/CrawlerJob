@@ -31,6 +31,10 @@ Invoke-RestMethod http://localhost:8081/health
 
 For a UI smoke test, open <http://localhost:5173>, submit `https://example.com` with max depth `1`, and confirm the Job Details page shows the job ID and updates to `Completed` with its page tree. Then open **History** and confirm the job appears there; open it again to verify navigation back to its details. Loopback and private-network URLs are intentionally rejected.
 
+### Start Crawl screen
+
+![Website Crawl Jobs start crawl screen](docs/images/start-crawl.png)
+
 To submit and inspect a job through the API instead:
 
 ```powershell
