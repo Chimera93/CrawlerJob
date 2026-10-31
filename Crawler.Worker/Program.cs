@@ -20,12 +20,7 @@ builder.Services.AddMassTransit(x =>
     x.UsingRabbitMq((context, cfg) =>
     {
         cfg.Host(builder.Configuration["RabbitMq:Host"] ?? "localhost");
-        cfg.ReceiveEndpoint("crawl-jobs", endpoint =>
-        {
-            endpoint.UseMessageRetry(retry => retry.Intervals(
-                TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2)));
-            endpoint.ConfigureConsumer<CrawlConsumer>(context);
-        });
+        cfg.ConfigureCrawlEndpoint(context);
     });
 });
 var app = builder.Build();
