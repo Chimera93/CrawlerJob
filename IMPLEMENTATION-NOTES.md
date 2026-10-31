@@ -11,8 +11,8 @@ This is the working breakdown for the home assignment. Update the status and dec
 | Messaging | RabbitMQ, durable delivery, at-least-once/idempotent processing, retry transient failures, and dead-letter poison messages | Implemented; Testcontainers verifies real-broker retries, failed-job state, and error-queue delivery |
 | SQL storage | Persist job lifecycle, pages, and parent-child edges; avoid duplicate rows; support history and tree reads | Implemented; real PostgreSQL persistence and API reads covered by Testcontainers |
 | React UI | Start crawl, poll job status/progress, render results as a tree, and browse history; include loading/error states | Implemented in `frontend/`; browser-level end-to-end verification remains |
-| Tests | Unit, API/worker behavior, and container-backed integration tests | Implemented; 36 tests pass, including the container-backed pipeline |
-| Delivery | Docker Compose for API, worker, database, broker, and frontend; README with run steps, choices, limitations, and priorities | Implemented; Testcontainers integration passes; full Compose stack/browser smoke test remains |
+| Tests | Unit, API/worker behavior, and container-backed integration tests | Implemented; 37 tests pass, including the container-backed pipeline and Swagger documentation |
+| Delivery | Docker Compose for API, worker, database, broker, and frontend; README with run steps, choices, limitations, and priorities; CI tests on changes to `main` | Implemented; CI workflow runs the Release test suite on pushes and pull requests targeting `main`; configure **Build and test** as a required check in GitHub branch protection/rulesets |
 | Observability | Structured job-aware logs and health endpoints | Implemented; operational behavior still needs a Compose smoke test |
 
 ## Component boundaries
@@ -62,7 +62,7 @@ Deliver the system as end-to-end user capabilities rather than finishing every l
 
 For each slice, derive focused tests from the user requirement before changing implementation: write a failing test for a behavior or edge case, implement the smallest change that passes, then refactor while keeping the tests green. Prefer fast unit tests for deterministic domain rules; use fixture-backed tests for HTML parsing and integration tests only where behavior crosses process, broker, or database boundaries.
 
-Tests should assert user-facing behavior and meaningful edge cases, not implementation details. The current 36 tests cover URL normalization, public-IP URL policy, redirect host restrictions, HTTP(S)-only domain-ratio calculation, HTML parsing, API validation/submission, bounded crawling, cancellation, retry/redelivery, partial-crawl recovery, exhausted-retry error-queue delivery, persisted API read paths, and the PostgreSQL/RabbitMQ integration pipeline. They were added as the slices were verified; the original implementation was not developed under a strict test-first process.
+Tests should assert user-facing behavior and meaningful edge cases, not implementation details. The current 37 tests cover URL normalization, public-IP URL policy, redirect host restrictions, HTTP(S)-only domain-ratio calculation, HTML parsing, API validation/submission, bounded crawling, cancellation, retry/redelivery, partial-crawl recovery, exhausted-retry error-queue delivery, persisted API read paths, Swagger documentation, and the PostgreSQL/RabbitMQ integration pipeline. They were added as the slices were verified; the original implementation was not developed under a strict test-first process.
 
 ### Test backlog mapped to slices
 
@@ -76,10 +76,11 @@ Tests should assert user-facing behavior and meaningful edge cases, not implemen
 ## Progress / open work
 
 - Implemented API routes, PostgreSQL schema/access, MassTransit RabbitMQ publishing/consumption, worker crawl loop, React screens, and Compose.
-- All 36 .NET tests pass. Testcontainers integration tests have successfully run against real PostgreSQL and RabbitMQ; they also exercise the API through HTTP and crawl against a local deterministic HTTP server.
+- All 37 .NET tests pass. Testcontainers integration tests have successfully run against real PostgreSQL and RabbitMQ; they also exercise the API through HTTP and crawl against a local deterministic HTTP server.
 - Remaining verification: full Compose/browser smoke test. Testcontainers tests require Docker; the UI exists but has not been browser-tested in this assessment.
+- CI is implemented in `.github/workflows/ci.yml`; repository administrators still need to select **Build and test** as a required status check for `main`.
 - Known first-pass cuts: no transactional outbox or configurable page limit. Authentication and rate limiting are intentionally not implemented in the app; in production they should be enforced by the hosting layer (for example, an identity-aware API gateway and ingress/load-balancer rate limits). The local Compose setup is development-only and must not be treated as that boundary. The outbox gap means a crash between job persistence and message publish can leave a pending job without a queued message.
 
 ## Final handoff summary
 
-The assessment delivers a .NET 8 API and worker, PostgreSQL persistence, RabbitMQ messaging, a React UI, and Docker Compose. Verification prioritizes the submission-to-crawl flow, bounded crawl rules, retry/redelivery behavior, persistence, API read paths, and Testcontainers isolation. SSRF defenses and cooperative cancellation are implemented and covered by tests. Remaining work is a full Compose/UI smoke test. Deferred items include an outbox, configurable crawl limits, and CI. Authentication and rate limiting are deployment responsibilities for a production hosting boundary, not application features in this assessment.
+The assessment delivers a .NET 8 API and worker, PostgreSQL persistence, RabbitMQ messaging, a React UI, Docker Compose, and a GitHub Actions test workflow. Verification prioritizes the submission-to-crawl flow, bounded crawl rules, retry/redelivery behavior, persistence, API read paths, and Testcontainers isolation. SSRF defenses and cooperative cancellation are implemented and covered by tests. Remaining work is a full Compose/UI smoke test and configuring the CI check as required in GitHub branch protection. Deferred items include an outbox and configurable crawl limits. Authentication and rate limiting are deployment responsibilities for a production hosting boundary, not application features in this assessment.
