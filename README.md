@@ -4,13 +4,47 @@ A small .NET 8 / React system for submitting bounded website crawls. The API per
 
 ## Run locally
 
-Requirements: Docker Desktop with Compose. From the repository root:
+Requirements: Docker Desktop with Compose. Run these commands from the repository root:
 
 ```powershell
-docker compose up --build
+docker compose up --build -d
+docker compose ps
 ```
 
-Open the UI at <http://localhost:5173>. API health is at <http://localhost:8080/health>, worker health at <http://localhost:8081/health>, and RabbitMQ management UI at <http://localhost:15672> (default guest/guest).
+If a .NET image build fails with `exec /bin/sh: exec format error` even though Docker reports the correct platform, retry from the repository root with Docker's legacy builder. Build the .NET services and frontend separately, then start the stack:
+
+```powershell
+$env:DOCKER_BUILDKIT = "0"
+$env:COMPOSE_DOCKER_CLI_BUILD = "0"
+docker compose build api worker
+docker compose build frontend
+docker compose up -d
+docker compose ps
+```
+
+Wait for `db` and `rabbitmq` to report healthy and the other services to be running. Check API and worker health:
+
+```powershell
+Invoke-RestMethod http://localhost:8080/health
+Invoke-RestMethod http://localhost:8081/health
+```
+
+For a UI smoke test, open <http://localhost:5173>, submit `https://example.com` with max depth `1`, and confirm the Job Details page shows the job ID and updates to `Completed` with its page tree. Then open **History** and confirm the job appears there; open it again to verify navigation back to its details. Loopback and private-network URLs are intentionally rejected.
+
+To submit and inspect a job through the API instead:
+
+```powershell
+$job = Invoke-RestMethod -Method Post `
+  -Uri http://localhost:8080/api/jobs `
+  -ContentType 'application/json' `
+  -Body '{"url":"https://example.com","maxDepth":1}'
+
+$id = $job.jobId
+Invoke-RestMethod "http://localhost:8080/api/jobs/$id"
+Invoke-RestMethod "http://localhost:8080/api/jobs/$id/tree"
+```
+
+The status may initially be `Pending` or `Running`; check again until it reaches `Completed` or `Failed`. RabbitMQ management is at <http://localhost:15672> (default guest/guest). For service diagnostics, run `docker compose logs api worker db rabbitmq frontend`.
 
 Stop with `docker compose down`. PostgreSQL data is kept in the `crawler-data` volume; `docker compose down -v` removes that data.
 
