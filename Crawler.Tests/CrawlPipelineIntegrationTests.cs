@@ -248,6 +248,27 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
         Assert.Equal(HttpStatusCode.BadRequest, invalidPageSizeResponse.StatusCode);
     }
 
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Save_page_batches_high_fan_out_edges_and_remains_idempotent()
+    {
+        var jobId = Guid.NewGuid();
+        const string pageUrl = "https://fanout.example/";
+        const string parentUrl = "https://fanout.example/parent";
+        var childUrls = Enumerable.Range(1, 300)
+            .Select(index => $"https://fanout.example/child-{index}")
+            .ToArray();
+        await fixture.Store.CreateJobAsync(jobId, pageUrl, 1, CancellationToken.None);
+
+        var page = new CrawlPage(jobId, pageUrl, parentUrl, 0, 0);
+        await fixture.Store.SavePageAsync(page, childUrls, CancellationToken.None);
+        await fixture.Store.SavePageAsync(page, childUrls, CancellationToken.None);
+
+        var (pages, edges) = await CountPersistedRowsAsync(fixture.PostgresConnectionString, jobId);
+        Assert.Equal(1, pages);
+        Assert.Equal(childUrls.Length + 1, edges);
+    }
+
     private static async Task WaitForCountAsync(Func<int> count, int expected)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));

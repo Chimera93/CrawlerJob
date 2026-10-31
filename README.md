@@ -115,6 +115,10 @@ Use a test-first loop where practical: derive a focused test from the requiremen
 
 - **Implemented first:** durable job lifecycle and clear API/worker boundaries, then bounded crawl persistence and messaging. Those paths establish the assignment's core asynchronous flow.
 - **Cut / simplified:** no authentication or rate limiting is built into the application; production deployments are expected to enforce both at the hosting boundary (for example, an identity-aware API gateway and ingress/load balancer policies). The local Compose setup is for development, not a production security boundary. Other omissions include configurable page limits, content rendering, and SSE. Direct publish follows the job insert rather than using a transactional outbox.
-- **Next with more time:** add a transactional outbox and stronger poison-message replay/observability, delayed redelivery across process restarts, load/performance tests, crawl politeness limits, and a UI pagination control. The current worker's 200-page ceiling is a constant and should become configuration.
+- **Next with more time:** add a transactional outbox and stronger poison-message replay/observability, delayed redelivery across process restarts, a capacity/throughput test with an explicit target, crawl politeness limits, and a UI pagination control. The current worker's 200-page ceiling is a constant and should become configuration. The CI k6 scenario is intentionally a short regression check, not a capacity test; see [ADR 0008](docs/adr/0008-defer-capacity-testing.md).
 
 See [IMPLEMENTATION-NOTES.md](IMPLEMENTATION-NOTES.md) for the ongoing requirement breakdown and decision log.
+
+## Project timeline
+
+For the implementation sequence, architecture tradeoffs, setbacks, PR milestones, and deferred work, see the [project timeline](PROJECT-TIMELINE.md).
