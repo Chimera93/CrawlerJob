@@ -10,7 +10,9 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Npgsql;
 using Testcontainers.PostgreSql;
 using Testcontainers.RabbitMq;
@@ -27,6 +29,73 @@ public sealed class CrawlPipelineCollection : ICollectionFixture<IntegrationFixt
 [Collection(CrawlPipelineCollection.Name)]
 public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
 {
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Cancellation_finishes_in_flight_request_then_stops_before_next_page()
+    {
+        var requestStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRequest = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var childRequests = 0;
+        var site = await StartTestSiteAsync(
+            () => Results.Content("<p>unused</p>", "text/html"),
+            () =>
+            {
+                Interlocked.Increment(ref childRequests);
+                return Task.FromResult<IResult>(Results.Content("<p>child</p>", "text/html"));
+            },
+            async () =>
+            {
+                requestStarted.TrySetResult();
+                await releaseRequest.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                return Results.Content("<a href='/child'>child</a>", "text/html");
+            });
+
+        try
+        {
+            var store = new PageSaveSignalingStore(fixture.Store);
+            await using var provider = CreateWorkerProvider(store, fixture.RabbitMq.GetConnectionString());
+            var bus = provider.GetRequiredService<IBusControl>();
+            await bus.StartAsync();
+            try
+            {
+                await using var api = new ApiFactory(
+                    fixture.PostgresConnectionString, fixture.RabbitMq.GetConnectionString());
+                using var client = api.CreateClient();
+                var jobId = await SubmitJobAsync(client, site.RootUrl, 1);
+                await requestStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+                using var cancelResponse = await client.PostAsync($"/api/jobs/{jobId}/cancel", null);
+                Assert.Equal(HttpStatusCode.NoContent, cancelResponse.StatusCode);
+
+                releaseRequest.TrySetResult();
+                await store.PageSaved.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                await store.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                var job = await fixture.Store.GetJobAsync(jobId, CancellationToken.None);
+                Assert.NotNull(job);
+                Assert.Equal("Canceled", job.Status);
+                Assert.Equal(1, job.PagesCrawled);
+                Assert.Equal(0, Volatile.Read(ref childRequests));
+
+                using var repeatedCancel = await client.PostAsync($"/api/jobs/{jobId}/cancel", null);
+                Assert.Equal(HttpStatusCode.Conflict, repeatedCancel.StatusCode);
+                using var missingCancel = await client.PostAsync($"/api/jobs/{Guid.NewGuid()}/cancel", null);
+                Assert.Equal(HttpStatusCode.NotFound, missingCancel.StatusCode);
+            }
+            finally
+            {
+                releaseRequest.TrySetResult();
+                await bus.StopAsync();
+            }
+        }
+        finally
+        {
+            releaseRequest.TrySetResult();
+            await site.App.DisposeAsync();
+        }
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task Concurrent_duplicate_delivery_does_not_duplicate_persisted_pages_or_edges()
@@ -416,6 +485,7 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<ICrawlExecutionStore>(store);
+        services.AddSingleton<ICrawlUrlPolicy, AllowCrawlUrlPolicy>();
         services.AddHttpClient("crawler").ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
         {
             AllowAutoRedirect = false
@@ -455,12 +525,15 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
     }
 
     private static async Task<(WebApplication App, string RootUrl)> StartTestSiteAsync(
-        Func<IResult> rootResponse, Func<Task<IResult>>? childResponse = null)
+        Func<IResult> rootResponse, Func<Task<IResult>>? childResponse = null,
+        Func<Task<IResult>>? delayedRootResponse = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
         var app = builder.Build();
-        app.MapGet("/", () => rootResponse());
+        app.MapGet("/", async () => delayedRootResponse is null
+            ? rootResponse()
+            : await delayedRootResponse());
         app.MapGet("/child", async () =>
             childResponse is null
                 ? Results.Content("<p>child page</p>", "text/html")
@@ -498,7 +571,48 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
                     ["ConnectionStrings:Crawler"] = postgresConnectionString,
                     ["RabbitMq:Uri"] = rabbitMqConnectionString
                 }));
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<ICrawlUrlPolicy>();
+                services.AddSingleton<ICrawlUrlPolicy, AllowCrawlUrlPolicy>();
+            });
         }
+    }
+
+    private sealed class AllowCrawlUrlPolicy : ICrawlUrlPolicy
+    {
+        public Task EnsurePublicHttpUrlAsync(Uri uri, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class PageSaveSignalingStore(ICrawlExecutionStore inner) : ICrawlExecutionStore
+    {
+        public TaskCompletionSource PageSaved { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource CancellationObserved { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<CrawlJob?> GetJobAsync(Guid id, CancellationToken ct) => inner.GetJobAsync(id, ct);
+        public async Task<bool> IsCancellationRequestedAsync(Guid id, CancellationToken ct)
+        {
+            var canceled = await inner.IsCancellationRequestedAsync(id, ct);
+            if (canceled)
+                CancellationObserved.TrySetResult();
+            return canceled;
+        }
+        public Task SetRunningAsync(Guid id, CancellationToken ct) => inner.SetRunningAsync(id, ct);
+        public Task<bool> IsPageStoredAsync(Guid id, string url, CancellationToken ct) =>
+            inner.IsPageStoredAsync(id, url, ct);
+        public Task<IReadOnlyList<string>> GetOutgoingLinksAsync(Guid id, string parentUrl, CancellationToken ct) =>
+            inner.GetOutgoingLinksAsync(id, parentUrl, ct);
+
+        public async Task SavePageAsync(CrawlPage page, IReadOnlyCollection<string> children, CancellationToken ct)
+        {
+            await inner.SavePageAsync(page, children, ct);
+            PageSaved.TrySetResult();
+        }
+
+        public Task CompleteAsync(Guid id, CancellationToken ct) => inner.CompleteAsync(id, ct);
+        public Task FailAsync(Guid id, string reason, CancellationToken ct) => inner.FailAsync(id, reason, ct);
     }
 
     private sealed class TerminalReadSignalingStore(ICrawlExecutionStore inner) : ICrawlExecutionStore
@@ -507,6 +621,8 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<CrawlJob?> GetJobAsync(Guid id, CancellationToken ct) => SignalTerminalAsync(id, ct);
+        public Task<bool> IsCancellationRequestedAsync(Guid id, CancellationToken ct) =>
+            inner.IsCancellationRequestedAsync(id, ct);
 
         private async Task<CrawlJob?> SignalTerminalAsync(Guid id, CancellationToken ct)
         {
@@ -534,6 +650,8 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<CrawlJob?> GetJobAsync(Guid id, CancellationToken ct) => inner.GetJobAsync(id, ct);
+        public Task<bool> IsCancellationRequestedAsync(Guid id, CancellationToken ct) =>
+            inner.IsCancellationRequestedAsync(id, ct);
         public Task SetRunningAsync(Guid id, CancellationToken ct) => inner.SetRunningAsync(id, ct);
         public Task<bool> IsPageStoredAsync(Guid id, string url, CancellationToken ct) =>
             inner.IsPageStoredAsync(id, url, ct);

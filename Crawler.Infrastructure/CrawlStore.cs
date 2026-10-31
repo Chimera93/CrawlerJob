@@ -95,6 +95,30 @@ public sealed class CrawlStore(IConfiguration configuration) : ICrawlJobStore, I
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task<bool> CancelJobAsync(Guid id, CancellationToken ct)
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+        await using var command = new NpgsqlCommand("""
+            UPDATE crawl_jobs
+            SET status='Canceled',completed_at=@now
+            WHERE job_id=@id AND status IN ('Pending','Running')
+            """, connection);
+        command.Parameters.AddWithValue("id", id);
+        command.Parameters.AddWithValue("now", DateTimeOffset.UtcNow);
+        return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task<bool> IsCancellationRequestedAsync(Guid id, CancellationToken ct)
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+        await using var command = new NpgsqlCommand(
+            "SELECT EXISTS(SELECT 1 FROM crawl_jobs WHERE job_id=@id AND status='Canceled')", connection);
+        command.Parameters.AddWithValue("id", id);
+        return (bool)(await command.ExecuteScalarAsync(ct) ?? false);
+    }
+
     public async Task<bool> IsPageStoredAsync(Guid id, string url, CancellationToken ct)
     {
         await using var connection = new NpgsqlConnection(_connectionString);
@@ -201,7 +225,8 @@ public sealed class CrawlStore(IConfiguration configuration) : ICrawlJobStore, I
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(ct);
         await using var command = new NpgsqlCommand("""
-            UPDATE crawl_jobs SET status=@status,completed_at=@now,failure_reason=@reason WHERE job_id=@id
+            UPDATE crawl_jobs SET status=@status,completed_at=@now,failure_reason=@reason
+            WHERE job_id=@id AND status IN ('Pending','Running')
             """, connection);
         command.Parameters.AddWithValue("status", status);
         command.Parameters.AddWithValue("now", DateTimeOffset.UtcNow);

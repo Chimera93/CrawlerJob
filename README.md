@@ -4,19 +4,58 @@ A small .NET 8 / React system for submitting bounded website crawls. The API per
 
 ## Run locally
 
-Requirements: Docker Desktop with Compose. From the repository root:
+Requirements: Docker Desktop with Compose. Run these commands from the repository root:
 
 ```powershell
-docker compose up --build
+docker compose up --build -d
+docker compose ps
 ```
 
-Open the UI at <http://localhost:5173>. API health is at <http://localhost:8080/health>, worker health at <http://localhost:8081/health>, and RabbitMQ management UI at <http://localhost:15672> (default guest/guest).
+If a .NET image build fails with `exec /bin/sh: exec format error` even though Docker reports the correct platform, retry from the repository root with Docker's legacy builder. Build the .NET services and frontend separately, then start the stack:
+
+```powershell
+$env:DOCKER_BUILDKIT = "0"
+$env:COMPOSE_DOCKER_CLI_BUILD = "0"
+docker compose build api worker
+docker compose build frontend
+docker compose up -d
+docker compose ps
+```
+
+Wait for `db` and `rabbitmq` to report healthy and the other services to be running. Check API and worker health:
+
+```powershell
+Invoke-RestMethod http://localhost:8080/health
+Invoke-RestMethod http://localhost:8081/health
+```
+
+For a UI smoke test, open <http://localhost:5173>, submit `https://example.com` with max depth `1`, and confirm the Job Details page shows the job ID and updates to `Completed` with its page tree. Then open **History** and confirm the job appears there; open it again to verify navigation back to its details. Loopback and private-network URLs are intentionally rejected.
+
+### Start Crawl screen
+
+![Website Crawl Jobs start crawl screen](docs/images/start-crawl.png)
+
+To submit and inspect a job through the API instead:
+
+```powershell
+$job = Invoke-RestMethod -Method Post `
+  -Uri http://localhost:8080/api/jobs `
+  -ContentType 'application/json' `
+  -Body '{"url":"https://example.com","maxDepth":1}'
+
+$id = $job.jobId
+Invoke-RestMethod "http://localhost:8080/api/jobs/$id"
+Invoke-RestMethod "http://localhost:8080/api/jobs/$id/tree"
+```
+
+The status may initially be `Pending` or `Running`; check again until it reaches `Completed` or `Failed`. RabbitMQ management is at <http://localhost:15672> (default guest/guest). For service diagnostics, run `docker compose logs api worker db rabbitmq frontend`.
 
 Stop with `docker compose down`. PostgreSQL data is kept in the `crawler-data` volume; `docker compose down -v` removes that data.
 
 ## API
 
 - `POST /api/jobs` — body `{"url":"https://example.com","maxDepth":2}`; returns `202 {"jobId":"..."}`
+- `POST /api/jobs/{jobId}/cancel` — cooperatively cancel a pending/running job; returns `204`, `404` for an unknown job, or `409` if it is already terminal
 - `GET /api/jobs/{jobId}` — status, timestamps, page count, and failure reason
 - `GET /api/jobs/{jobId}/tree` — discovered-page tree and per-page domain link ratio
 - `GET /api/jobs?page=1&pageSize=20` — recent-first, paginated history
@@ -33,6 +72,8 @@ Stop with `docker compose down`. PostgreSQL data is kept in the `crawler-data` v
 - MassTransit applies two in-memory retries after the original attempt (1s and 2s intervals). Exceptions from request timeouts, server errors, database access, or parsing are retried; HTTP 4xx responses and non-HTML pages are skipped. On the final attempt the worker marks the job failed and lets the exception propagate so MassTransit routes the failed message to its error queue. The in-memory retry policy is intentionally short and does not provide delayed redelivery across process restarts.
 - Page/edge uniqueness plus `ON CONFLICT DO NOTHING` makes persisted crawl results safe under redelivery. A redelivered partial crawl can resume traversal from already-persisted outgoing edges.
 - The starting domain is the initial URL's host (case-insensitive). Relative and fragment links are normalized; only HTTP(S) links contribute to the ratio. External HTTP(S) links are recorded as edges and count in the denominator but are not crawled. A page with no eligible links has ratio 0.
+- Crawl submission and every worker request reject credentials, non-HTTP(S) URLs, and hosts with any non-globally-routable DNS answer. The worker resolves and validates addresses again at connection time and connects directly to a validated IP to mitigate DNS rebinding. Redirects are manual, limited to five hops, and may not change host. See [ADR 0005](docs/adr/0005-public-url-policy-and-cancellation.md).
+- Cancellation is cooperative: the in-flight response is fully read and its page result persisted, then the worker stops before requesting another page. The job remains `Canceled`; `completed_at` records the terminal timestamp and the UI displays any partial tree.
 - The UI uses polling rather than SSE/SignalR. It shows job state, timestamps, count-based progress, failure text, result tree, and history.
 
 ## Testing
@@ -58,7 +99,7 @@ Use a test-first loop where practical: derive a focused test from the requiremen
 ## What was prioritized, cut, and next
 
 - **Implemented first:** durable job lifecycle and clear API/worker boundaries, then bounded crawl persistence and messaging. Those paths establish the assignment's core asynchronous flow.
-- **Cut / simplified:** no cancellation endpoint, authentication, rate limiting, configurable page limit, content rendering, or SSE. Direct publish follows the job insert rather than using a transactional outbox.
-- **Next with more time:** add a transactional outbox and stronger poison-message replay/observability, delayed redelivery across process restarts, load/performance tests, stricter public-URL/SSRF controls and crawl politeness limits, a UI pagination control, and CI build/test automation. The current worker's 200-page ceiling is a constant and should become configuration.
+- **Cut / simplified:** no authentication or rate limiting is built into the application; production deployments are expected to enforce both at the hosting boundary (for example, an identity-aware API gateway and ingress/load balancer policies). The local Compose setup is for development, not a production security boundary. Other omissions include configurable page limits, content rendering, and SSE. Direct publish follows the job insert rather than using a transactional outbox.
+- **Next with more time:** add a transactional outbox and stronger poison-message replay/observability, delayed redelivery across process restarts, load/performance tests, crawl politeness limits, a UI pagination control, and CI build/test automation. The current worker's 200-page ceiling is a constant and should become configuration.
 
 See [IMPLEMENTATION-NOTES.md](IMPLEMENTATION-NOTES.md) for the ongoing requirement breakdown and decision log.

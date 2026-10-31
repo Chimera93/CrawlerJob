@@ -62,6 +62,23 @@ function Details({ id }) {
   const [job, setJob] = useState(null);
   const [tree, setTree] = useState([]);
   const [error, setError] = useState("");
+  const [canceling, setCanceling] = useState(false);
+
+  async function cancelJob() {
+    setCanceling(true);
+    setError("");
+    try {
+      const response = await fetch(`${api}/api/jobs/${id}/cancel`, { method: "POST" });
+      if (!response.ok) throw new Error(response.status === 409
+        ? "This job can no longer be canceled."
+        : "Could not cancel the job.");
+      const updated = await fetch(`${api}/api/jobs/${id}`);
+      if (!updated.ok) throw new Error("Could not refresh job status.");
+      setJob(await updated.json());
+    } catch (e) { setError(e.message); }
+    finally { setCanceling(false); }
+  }
+
   useEffect(() => {
     let active = true;
     async function refresh() {
@@ -72,7 +89,7 @@ function Details({ id }) {
         if (!active) return;
         setJob(current);
         setError("");
-        if (current.status === "Completed" || current.status === "Failed") {
+        if (current.status === "Completed" || current.status === "Failed" || current.status === "Canceled") {
           const result = await fetch(`${api}/api/jobs/${id}/tree`);
           if (result.ok && active) setTree(await result.json());
           return;
@@ -91,8 +108,12 @@ function Details({ id }) {
         <dt>Completed</dt><dd>{job.completedAt ? new Date(job.completedAt).toLocaleString() : "—"}</dd>
       </dl>
       {job.status === "Running" || job.status === "Pending" ? <progress max="200" value={Math.min(job.pagesCrawled, 200)} /> : null}
+      {job.status === "Running" || job.status === "Pending"
+        ? <button onClick={cancelJob} disabled={canceling}>{canceling ? "Canceling…" : "Cancel crawl"}</button>
+        : null}
       {job.failureReason && <p className="error">{job.failureReason}</p>}
       {job.status === "Completed" && <><h3>Discovered pages</h3>{tree.length ? tree.map(node => <Tree key={node.url} node={node} />) : <p>No HTML pages discovered.</p>}</>}
+      {job.status === "Canceled" && <><h3>Pages found before cancellation</h3>{tree.length ? tree.map(node => <Tree key={node.url} node={node} />) : <p>No HTML pages discovered.</p>}</>}
     </>}
   </section>;
 }

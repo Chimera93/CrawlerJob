@@ -6,7 +6,8 @@ namespace CrawlerJob.Controllers;
 
 [ApiController]
 [Route("api/jobs")]
-public sealed class JobsController(ICrawlJobStore store, IPublishEndpoint publisher) : ControllerBase
+public sealed class JobsController(ICrawlJobStore store, IPublishEndpoint publisher,
+    ICrawlUrlPolicy urlPolicy) : ControllerBase
 {
     [HttpPost]
     public async Task<IActionResult> Create(CreateJobRequest request, CancellationToken cancellationToken)
@@ -19,10 +20,27 @@ public sealed class JobsController(ICrawlJobStore store, IPublishEndpoint publis
         if (maxDepth is < 0 or > 10)
             return BadRequest(new { error = "maxDepth must be between 0 and 10." });
 
+        try
+        {
+            await urlPolicy.EnsurePublicHttpUrlAsync(uri, cancellationToken);
+        }
+        catch (UnsafeCrawlUrlException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+
         var jobId = Guid.NewGuid();
         await store.CreateJobAsync(jobId, UrlNormalizer.Normalize(uri), maxDepth, cancellationToken);
         await publisher.Publish(new CrawlMessage(jobId), cancellationToken);
         return Accepted(new { jobId });
+    }
+
+    [HttpPost("{jobId:guid}/cancel")]
+    public async Task<IActionResult> Cancel(Guid jobId, CancellationToken cancellationToken)
+    {
+        if (await store.GetJobAsync(jobId, cancellationToken) is null)
+            return NotFound();
+        return await store.CancelJobAsync(jobId, cancellationToken) ? NoContent() : Conflict();
     }
 
     [HttpGet("{jobId:guid}")]
