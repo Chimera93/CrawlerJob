@@ -1,14 +1,16 @@
 using System.Net;
+using System.Net.Http.Json;
 using Crawler.Infrastructure;
 using Crawler.Worker;
 using MassTransit;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Testcontainers.PostgreSql;
 using Testcontainers.RabbitMq;
 using Xunit;
@@ -20,7 +22,7 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
 {
     [Fact]
     [Trait("Category", "Integration")]
-    public async Task Published_job_is_retried_crawled_and_persisted()
+    public async Task Api_submission_is_retried_crawled_and_persisted()
     {
         var rootRequests = 0;
         var site = await StartTestSiteAsync(() =>
@@ -32,17 +34,29 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
 
         try
         {
-            var jobId = Guid.NewGuid();
-            await fixture.Store.CreateJobAsync(jobId, site.RootUrl, 1, CancellationToken.None);
             await using var provider = CreateWorkerProvider(fixture.Store, fixture.RabbitMq.GetConnectionString());
             var bus = provider.GetRequiredService<IBusControl>();
             await bus.StartAsync();
             try
             {
-                await bus.Publish(new CrawlMessage(jobId));
+                await using var api = new ApiFactory(
+                    fixture.PostgresConnectionString, fixture.RabbitMq.GetConnectionString());
+                using var client = api.CreateClient();
+                var response = await client.PostAsJsonAsync("/api/jobs", new
+                {
+                    url = site.RootUrl,
+                    maxDepth = 1
+                });
+                Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+                using var responseBody = await response.Content.ReadAsStreamAsync();
+                using var json = await System.Text.Json.JsonDocument.ParseAsync(responseBody);
+                var jobId = json.RootElement.GetProperty("jobId").GetGuid();
+
                 var job = await WaitForTerminalJobAsync(fixture.Store, jobId);
 
                 Assert.Equal("Completed", job.Status);
+                Assert.Equal(site.RootUrl, job.Url);
+                Assert.Equal(1, job.MaxDepth);
                 Assert.Equal(2, job.PagesCrawled);
                 Assert.Equal(2, Volatile.Read(ref rootRequests));
 
@@ -116,6 +130,20 @@ public sealed class CrawlPipelineIntegrationTests(IntegrationFixture fixture)
             await Task.Delay(TimeSpan.FromMilliseconds(100), timeout.Token);
         }
     }
+
+    private sealed class ApiFactory(string postgresConnectionString, string rabbitMqConnectionString)
+        : WebApplicationFactory<Program>
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ConnectionStrings:Crawler"] = postgresConnectionString,
+                    ["RabbitMq:Uri"] = rabbitMqConnectionString
+                }));
+        }
+    }
 }
 
 public sealed class IntegrationFixture : IAsyncLifetime
@@ -132,6 +160,7 @@ public sealed class IntegrationFixture : IAsyncLifetime
 
     public CrawlStore Store { get; private set; } = null!;
     public RabbitMqContainer RabbitMq => _rabbitMq;
+    public string PostgresConnectionString => _postgres.GetConnectionString();
 
     public async Task InitializeAsync()
     {
@@ -139,7 +168,7 @@ public sealed class IntegrationFixture : IAsyncLifetime
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["ConnectionStrings:Crawler"] = _postgres.GetConnectionString()
+                ["ConnectionStrings:Crawler"] = PostgresConnectionString
             })
             .Build();
         Store = new CrawlStore(configuration);
