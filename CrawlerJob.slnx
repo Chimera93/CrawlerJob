@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="CrawlerJob/CrawlerJob.csproj" />
+  <Project Path="Crawler.Infrastructure/Crawler.Infrastructure.csproj" />
+  <Project Path="Crawler.Worker/Crawler.Worker.csproj" />
+  <Project Path="Crawler.Tests/Crawler.Tests.csproj" />
+</Solution>

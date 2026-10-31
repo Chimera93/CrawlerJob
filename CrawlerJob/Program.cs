@@ -1,0 +1,22 @@
+using Crawler.Infrastructure;
+using MassTransit;
+
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddControllers();
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
+    policy.WithOrigins(builder.Configuration["Frontend:Origin"] ?? "http://localhost:5173")
+        .AllowAnyHeader().AllowAnyMethod()));
+builder.Services.AddSingleton<CrawlStore>();
+builder.Services.AddHealthChecks();
+builder.Services.AddMassTransit(x =>
+{
+    x.UsingRabbitMq((_, cfg) =>
+        cfg.Host(builder.Configuration["RabbitMq:Host"] ?? "localhost"));
+});
+
+var app = builder.Build();
+await app.Services.GetRequiredService<CrawlStore>().InitializeAsync();
+app.MapHealthChecks("/health");
+app.UseCors();
+app.MapControllers();
+app.Run();
