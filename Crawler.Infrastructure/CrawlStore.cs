@@ -161,10 +161,32 @@ public sealed class CrawlStore(IConfiguration configuration) : ICrawlJobStore, I
             command.Parameters.AddWithValue("ratio", page.DomainLinkRatio);
             await command.ExecuteNonQueryAsync(ct);
         }
+        var edgeCapacity = children.Count + (page.ParentUrl is null ? 0 : 1);
+        var parentUrls = new List<string>(edgeCapacity);
+        var childUrls = new List<string>(edgeCapacity);
         if (page.ParentUrl is not null)
-            await InsertEdgeAsync(connection, transaction, page.JobId, page.ParentUrl, page.Url, ct);
+        {
+            parentUrls.Add(page.ParentUrl);
+            childUrls.Add(page.Url);
+        }
         foreach (var child in children)
-            await InsertEdgeAsync(connection, transaction, page.JobId, page.Url, child, ct);
+        {
+            parentUrls.Add(page.Url);
+            childUrls.Add(child);
+        }
+        if (parentUrls.Count > 0)
+        {
+            await using var edges = new NpgsqlCommand("""
+                INSERT INTO crawl_edges(job_id,parent_url,child_url)
+                SELECT @id, edge.parent_url, edge.child_url
+                FROM unnest(@parents::text[], @children::text[]) AS edge(parent_url, child_url)
+                ON CONFLICT DO NOTHING
+                """, connection, transaction);
+            edges.Parameters.AddWithValue("id", page.JobId);
+            edges.Parameters.AddWithValue("parents", parentUrls.ToArray());
+            edges.Parameters.AddWithValue("children", childUrls.ToArray());
+            await edges.ExecuteNonQueryAsync(ct);
+        }
         await using (var progress = new NpgsqlCommand(
             "UPDATE crawl_jobs SET pages_crawled=(SELECT COUNT(*) FROM crawl_pages WHERE job_id=@id) WHERE job_id=@id",
             connection, transaction))
@@ -232,19 +254,6 @@ public sealed class CrawlStore(IConfiguration configuration) : ICrawlJobStore, I
         command.Parameters.AddWithValue("now", DateTimeOffset.UtcNow);
         command.Parameters.AddWithValue("reason", (object?)reason ?? DBNull.Value);
         command.Parameters.AddWithValue("id", id);
-        await command.ExecuteNonQueryAsync(ct);
-    }
-
-    private static async Task InsertEdgeAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
-        Guid id, string parent, string child, CancellationToken ct)
-    {
-        await using var command = new NpgsqlCommand("""
-            INSERT INTO crawl_edges(job_id,parent_url,child_url) VALUES (@id,@parent,@child)
-            ON CONFLICT DO NOTHING
-            """, connection, transaction);
-        command.Parameters.AddWithValue("id", id);
-        command.Parameters.AddWithValue("parent", parent);
-        command.Parameters.AddWithValue("child", child);
         await command.ExecuteNonQueryAsync(ct);
     }
 

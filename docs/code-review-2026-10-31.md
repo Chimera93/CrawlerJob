@@ -2,13 +2,16 @@
 
 ## Scope
 
-Static review of the application source on `origin/main`, with extra attention to SQL query shape and per-item database work. Findings are observations, not fixes.
+Static review of the application source on the `code-review` branch, with extra attention to SQL query shape and per-item database work. The first major finding was fixed in follow-up; other findings remain observations, not fixes.
+
+## Resolved during follow-up
+
+1. **Batched edge persistence** — `Crawler.Infrastructure/CrawlStore.cs`. Replaced the per-edge awaited insert loop with one `INSERT ... SELECT FROM unnest(@parents::text[], @children::text[]) ... ON CONFLICT DO NOTHING` per page. The parent edge and all outgoing edges are submitted in aligned arrays within the existing page transaction. This preserves the unique-key idempotency behavior while reducing database commands from one per edge to one per page. Added `Save_page_batches_high_fan_out_edges_and_remains_idempotent`, an integration test that saves 300 outgoing edges plus the parent edge twice and verifies exactly 301 edges and one page. The integration test passed.
 
 ## Major
 
-1. **One awaited SQL insert per discovered edge** — `Crawler.Infrastructure/CrawlStore.cs:166-167,238-247`. `SavePageAsync` loops through every child link and awaits a separate `INSERT` command for each, inside one transaction. A single high-link-count page therefore performs many sequential database round trips and keeps the transaction open throughout. Batch edge inserts (while preserving conflict-safe uniqueness) to avoid this scaling bottleneck.
-2. **Response bodies are unbounded in memory** — `Crawler.Worker/CrawlConsumer.cs:92-96,149`. `ResponseHeadersRead` avoids buffering in `HttpClient`, but `ReadAsStringAsync` then reads the entire HTML body into memory. The 200-page cap does not constrain bytes per page, so a large public response can exhaust worker memory, especially across concurrent jobs. Enforce a decompressed response-size limit while streaming and define how oversized pages affect the job.
-3. **Tree construction can expand a bounded graph into an enormous response** — `Crawler.Infrastructure/CrawlStore.cs:190-222`. The query loads stored pages and edges, then recursively emits a fresh `PageNode` for every simple path, copying the visited-path set at each branch. Crawled pages can have many cross-links, so shared descendants are repeated for each path; the 200-page limit does not bound edge count or path count. Return a graph-shaped representation with references, or impose a documented bound on tree expansion.
+1. **Response bodies are unbounded in memory** — `Crawler.Worker/CrawlConsumer.cs:92-96,149`. `ResponseHeadersRead` avoids buffering in `HttpClient`, but `ReadAsStringAsync` then reads the entire HTML body into memory. The 200-page cap does not constrain bytes per page, so a large public response can exhaust worker memory, especially across concurrent jobs. Enforce a decompressed response-size limit while streaming and define how oversized pages affect the job.
+2. **Tree construction can expand a bounded graph into an enormous response** — `Crawler.Infrastructure/CrawlStore.cs:190-222`. The query loads stored pages and edges, then recursively emits a fresh `PageNode` for every simple path, copying the visited-path set at each branch. Crawled pages can have many cross-links, so shared descendants are repeated for each path; the 200-page limit does not bound edge count or path count. Return a graph-shaped representation with references, or impose a documented bound on tree expansion.
 
 ## Minor
 
