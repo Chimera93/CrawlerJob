@@ -60,7 +60,7 @@ function History() {
 
 function Details({ id }) {
   const [job, setJob] = useState(null);
-  const [tree, setTree] = useState([]);
+  const [tree, setTree] = useState(null);
   const [error, setError] = useState("");
   const [canceling, setCanceling] = useState(false);
 
@@ -91,7 +91,8 @@ function Details({ id }) {
         setError("");
         if (current.status === "Completed" || current.status === "Failed" || current.status === "Canceled") {
           const result = await fetch(`${api}/api/jobs/${id}/tree`);
-          if (result.ok && active) setTree(await result.json());
+          if (!result.ok) throw new Error("Could not load discovered pages.");
+          if (active) setTree(await result.json());
           return;
         }
       } catch (e) { if (active) setError(e.message); }
@@ -112,15 +113,27 @@ function Details({ id }) {
         ? <button onClick={cancelJob} disabled={canceling}>{canceling ? "Canceling…" : "Cancel crawl"}</button>
         : null}
       {job.failureReason && <p className="error">{job.failureReason}</p>}
-      {job.status === "Completed" && <><h3>Discovered pages</h3>{tree.length ? tree.map(node => <Tree key={node.url} node={node} />) : <p>No HTML pages discovered.</p>}</>}
-      {job.status === "Canceled" && <><h3>Pages found before cancellation</h3>{tree.length ? tree.map(node => <Tree key={node.url} node={node} />) : <p>No HTML pages discovered.</p>}</>}
+      {job.status === "Completed" && <><h3>Discovered pages</h3>{tree === null ? !error && <p>Loading discovered pages…</p> : tree.length ? tree.map(node => <Tree key={node.url} node={node} />) : <p>No HTML pages discovered.</p>}</>}
+      {job.status === "Canceled" && <><h3>Pages found before cancellation</h3>{tree === null ? !error && <p>Loading discovered pages…</p> : tree.length ? tree.map(node => <Tree key={node.url} node={node} />) : <p>No HTML pages discovered.</p>}</>}
     </>}
   </section>;
 }
 
-function Tree({ node }) {
-  return <ul><li><a href={node.url} target="_blank" rel="noreferrer">{node.url}</a> <span>Domain link ratio: {(node.domainLinkRatio * 100).toFixed(1)}%</span>
-    {node.children?.map(child => <Tree key={child.url} node={child} />)}</li></ul>;
+function Tree({ node, depth = 0 }) {
+  const [expanded, setExpanded] = useState(depth < 2);
+  const children = node.children || [];
+  return <ul className="page-tree"><li>
+    <div className="tree-heading">
+      {children.length > 0
+        ? <button className="tree-toggle" type="button" aria-expanded={expanded}
+            aria-label={`${expanded ? "Collapse" : "Expand"} ${node.url}`}
+            onClick={() => setExpanded(!expanded)}>{expanded ? "−" : "+"}</button>
+        : <span className="tree-toggle-placeholder" />}
+      <a href={node.url} target="_blank" rel="noreferrer">{node.url}</a>
+      <span>Domain link ratio: {(node.domainLinkRatio * 100).toFixed(1)}%</span>
+    </div>
+    {expanded && children.map(child => <Tree key={child.url} node={child} depth={depth + 1} />)}
+  </li></ul>;
 }
 
 export default App;

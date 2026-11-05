@@ -18,5 +18,10 @@ dd { margin: 0; overflow-wrap: anywhere; }
 ul { padding-left: 1.5rem; }
 li { margin: .4rem 0; overflow-wrap: anywhere; }
 li span { color: #536171; }
+.page-tree { list-style: none; margin: .4rem 0; padding-left: 1.25rem; }
+.tree-heading { display: flex; align-items: baseline; gap: .5rem; }
+.tree-heading a { overflow-wrap: anywhere; }
+.tree-toggle, .tree-toggle-placeholder { width: 1.5rem; height: 1.5rem; flex: 0 0 1.5rem; }
+.tree-toggle { padding: 0; line-height: 1; }
 .error { color: #a32020; }
 @media (max-width: 650px) { header { align-items: flex-start; flex-direction: column; } table { font-size: .85rem; } }
