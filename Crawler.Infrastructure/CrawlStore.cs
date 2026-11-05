@@ -207,10 +207,10 @@ public sealed class CrawlStore(IConfiguration configuration) : ICrawlJobStore, I
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(ct);
-        var pages = new Dictionary<string, (double Ratio, List<string> Children)>(StringComparer.Ordinal);
+        var pages = new Dictionary<string, (double Ratio, int Depth, List<string> Children)>(StringComparer.Ordinal);
         string? startingUrl = null;
         await using (var command = new NpgsqlCommand("""
-            SELECT j.url,p.url,p.domain_link_ratio,e.child_url
+            SELECT j.url,p.url,p.domain_link_ratio,p.depth,e.child_url
             FROM crawl_jobs j
             JOIN crawl_pages p ON p.job_id=j.job_id
             LEFT JOIN crawl_edges e ON e.job_id=p.job_id AND e.parent_url=p.url
@@ -223,9 +223,10 @@ public sealed class CrawlStore(IConfiguration configuration) : ICrawlJobStore, I
             {
                 startingUrl ??= reader.GetString(0);
                 var url = reader.GetString(1);
-                var entry = pages.GetValueOrDefault(url, (reader.GetDouble(2), new List<string>()));
-                if (!reader.IsDBNull(3))
-                    entry.Item2.Add(reader.GetString(3));
+                var entry = pages.GetValueOrDefault(url,
+                    (reader.GetDouble(2), reader.GetInt32(3), new List<string>()));
+                if (!reader.IsDBNull(4))
+                    entry.Item3.Add(reader.GetString(4));
                 pages[url] = entry;
             }
         }

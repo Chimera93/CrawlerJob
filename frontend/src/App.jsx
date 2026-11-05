@@ -119,9 +119,21 @@ function Details({ id }) {
   </section>;
 }
 
-function Tree({ node }) {
-  return <ul><li><a href={node.url} target="_blank" rel="noreferrer">{node.url}</a> <span>Domain link ratio: {(node.domainLinkRatio * 100).toFixed(1)}%</span>
-    {node.children?.map(child => <Tree key={child.url} node={child} />)}</li></ul>;
+function Tree({ node, depth = 0 }) {
+  const [expanded, setExpanded] = useState(depth < 2);
+  const children = node.children || [];
+  return <ul className="page-tree"><li>
+    <div className="tree-heading">
+      {children.length > 0
+        ? <button className="tree-toggle" type="button" aria-expanded={expanded}
+            aria-label={`${expanded ? "Collapse" : "Expand"} ${node.url}`}
+            onClick={() => setExpanded(!expanded)}>{expanded ? "−" : "+"}</button>
+        : <span className="tree-toggle-placeholder" />}
+      <a href={node.url} target="_blank" rel="noreferrer">{node.url}</a>
+      <span>Domain link ratio: {(node.domainLinkRatio * 100).toFixed(1)}%</span>
+    </div>
+    {expanded && children.map(child => <Tree key={child.url} node={child} depth={depth + 1} />)}
+  </li></ul>;
 }
 
 export default App;
