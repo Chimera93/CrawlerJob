@@ -208,38 +208,28 @@ public sealed class CrawlStore(IConfiguration configuration) : ICrawlJobStore, I
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(ct);
         var pages = new Dictionary<string, (double Ratio, List<string> Children)>(StringComparer.Ordinal);
+        string? startingUrl = null;
         await using (var command = new NpgsqlCommand("""
-            SELECT p.url,p.domain_link_ratio,e.child_url
-            FROM crawl_pages p LEFT JOIN crawl_edges e ON e.job_id=p.job_id AND e.parent_url=p.url
-            WHERE p.job_id=@id ORDER BY p.url,e.child_url
+            SELECT j.url,p.url,p.domain_link_ratio,e.child_url
+            FROM crawl_jobs j
+            JOIN crawl_pages p ON p.job_id=j.job_id
+            LEFT JOIN crawl_edges e ON e.job_id=p.job_id AND e.parent_url=p.url
+            WHERE j.job_id=@id ORDER BY p.url,e.child_url
             """, connection))
         {
             command.Parameters.AddWithValue("id", jobId);
             await using var reader = await command.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
-                var url = reader.GetString(0);
-                var entry = pages.GetValueOrDefault(url, (reader.GetDouble(1), new List<string>()));
-                if (!reader.IsDBNull(2))
-                    entry.Item2.Add(reader.GetString(2));
+                startingUrl ??= reader.GetString(0);
+                var url = reader.GetString(1);
+                var entry = pages.GetValueOrDefault(url, (reader.GetDouble(2), new List<string>()));
+                if (!reader.IsDBNull(3))
+                    entry.Item2.Add(reader.GetString(3));
                 pages[url] = entry;
             }
         }
-        if (pages.Count == 0)
-            return [];
-        var children = pages.Values.SelectMany(p => p.Children).ToHashSet(StringComparer.Ordinal);
-        var roots = pages.Keys.Where(url => !children.Contains(url)).ToArray();
-        if (roots.Length == 0)
-            roots = [pages.Keys.First()];
-        return roots.Select(url => Build(url, new HashSet<string>(StringComparer.Ordinal))).ToArray();
-
-        PageNode Build(string url, HashSet<string> path)
-        {
-            if (!pages.TryGetValue(url, out var page) || !path.Add(url))
-                return new PageNode(url, 0, []);
-            var nodes = page.Children.Where(pages.ContainsKey).Select(child => Build(child, new(path))).ToArray();
-            return new PageNode(url, page.Ratio, nodes);
-        }
+        return CrawlTreeBuilder.Build(startingUrl, pages);
     }
 
     private async Task UpdateTerminalAsync(Guid id, string status, string? reason, CancellationToken ct)

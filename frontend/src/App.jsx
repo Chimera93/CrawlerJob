@@ -60,7 +60,7 @@ function History() {
 
 function Details({ id }) {
   const [job, setJob] = useState(null);
-  const [tree, setTree] = useState([]);
+  const [tree, setTree] = useState(null);
   const [error, setError] = useState("");
   const [canceling, setCanceling] = useState(false);
 
@@ -91,7 +91,8 @@ function Details({ id }) {
         setError("");
         if (current.status === "Completed" || current.status === "Failed" || current.status === "Canceled") {
           const result = await fetch(`${api}/api/jobs/${id}/tree`);
-          if (result.ok && active) setTree(await result.json());
+          if (!result.ok) throw new Error("Could not load discovered pages.");
+          if (active) setTree(await result.json());
           return;
         }
       } catch (e) { if (active) setError(e.message); }
@@ -112,8 +113,8 @@ function Details({ id }) {
         ? <button onClick={cancelJob} disabled={canceling}>{canceling ? "Canceling…" : "Cancel crawl"}</button>
         : null}
       {job.failureReason && <p className="error">{job.failureReason}</p>}
-      {job.status === "Completed" && <><h3>Discovered pages</h3>{tree.length ? tree.map(node => <Tree key={node.url} node={node} />) : <p>No HTML pages discovered.</p>}</>}
-      {job.status === "Canceled" && <><h3>Pages found before cancellation</h3>{tree.length ? tree.map(node => <Tree key={node.url} node={node} />) : <p>No HTML pages discovered.</p>}</>}
+      {job.status === "Completed" && <><h3>Discovered pages</h3>{tree === null ? !error && <p>Loading discovered pages…</p> : tree.length ? tree.map(node => <Tree key={node.url} node={node} />) : <p>No HTML pages discovered.</p>}</>}
+      {job.status === "Canceled" && <><h3>Pages found before cancellation</h3>{tree === null ? !error && <p>Loading discovered pages…</p> : tree.length ? tree.map(node => <Tree key={node.url} node={node} />) : <p>No HTML pages discovered.</p>}</>}
     </>}
   </section>;
 }
